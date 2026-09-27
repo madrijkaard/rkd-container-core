@@ -30,21 +30,65 @@ The initial JSON response is available at `http://127.0.0.1:8000/`.
 
 ## Deploy on the Ubuntu VPS with Docker Compose
 
-This repository has its own `docker-compose.yml`. It starts Django, installs the Docker CLI and Git in the backend image, and gives the backend access to the **host** Docker Engine through `/var/run/docker.sock`. It does not run another Docker daemon. It creates the shared `rkd-network` used by the frontend Compose project. Do not publish port 8000 to the internet; the frontend Nginx container proxies `/api/`, `/admin/`, and `/static/` over HTTPS.
+Este repositório tem seu próprio `docker-compose.yml`. Ele inicia Django e cria a rede `rkd-network`, compartilhada com o Compose do frontend. A imagem do backend inclui Git e o cliente Docker; ela usa o Docker Engine **da VPS** pelo socket `/var/run/docker.sock`, sem iniciar outro daemon. A porta 8000 permanece interna à rede Docker. O Nginx do frontend encaminha `/api/`, `/admin/` e `/static/` para o backend.
 
-On the VPS, clone both repositories. In this backend checkout, copy `.env.example` to `.env` and set a strong, stable `DJANGO_SECRET_KEY` and the real `TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET_KEY`. The `.env` file is ignored by Git. The Compose file sets `DJANGO_DEBUG=False`, `DJANGO_ALLOWED_HOSTS=sinan-pro.com`, and `TURNSTILE_ALLOWED_HOSTNAMES=sinan-pro.com`. Keep `.env` private, back it up securely, and do not bake these values into the image.
+### Pré-requisitos na VPS
+
+1. Ubuntu com acesso SSH e um usuário autorizado a executar Docker (`sudo docker ...` nos exemplos abaixo). Instale [Docker Engine, CLI e Buildx pelo repositório oficial](https://docs.docker.com/engine/install/ubuntu/) e o [plugin Docker Compose](https://docs.docker.com/compose/install/linux/) caso ainda não estejam instalados. Não é necessário instalar Python, Node.js ou Nginx diretamente no Ubuntu.
+2. Git e OpenSSL instalados na VPS (`sudo apt update && sudo apt install -y git openssl`), acesso para clonar os dois repositórios e saída HTTPS para baixar imagens/dependências e consultar GitHub e Cloudflare. Se algum dos repositórios da aplicação for privado, configure sua autenticação Git para o clone; o token informado na tela de imagens serve para os repositórios de código das imagens, não para clonar estes dois projetos.
+3. O domínio `sinan-pro.com` apontando para o IPv4 público da VPS. Se houver registro AAAA, ele também deve apontar para um IPv6 funcional da VPS; caso contrário, remova esse registro. Libere TCP 80 e 443 no firewall da VPS e no painel da Hostinger e deixe essas portas disponíveis para o Nginx do frontend. O Certbot usa a porta 80 para obter o certificado HTTPS. Não é preciso mudar os nameservers do domínio para a Cloudflare apenas para usar Turnstile.
+4. Um [widget Cloudflare Turnstile](https://developers.cloudflare.com/turnstile/get-started/widget-management/dashboard/) criado com o hostname **`sinan-pro.com`** (sem `https://` e sem caminho). Guarde a **Site key** e a **Secret key**. O modo Managed pode ser usado. A Secret key só deve ser configurada no backend. O login de produção exige ambas as chaves.
+
+Confirme o Docker antes de iniciar a aplicação:
 
 ```bash
-cp .env.example .env
-# Edit .env with your actual keys before starting.
-chmod 600 .env
-docker compose up -d --build
-docker compose ps
+sudo systemctl is-active docker
+sudo docker version
+sudo docker compose version
+sudo docker buildx version
 ```
 
-The SQLite file is `volumes/sqlite/container_core.sqlite3` on the VPS host, mounted as `/data/container_core.sqlite3` in the backend. The entrypoint runs migrations before Gunicorn starts. Back up both the database and `DJANGO_SECRET_KEY`; changing the key makes stored private-repository tokens unreadable. To create the first operator on a fresh VPS database, run `docker compose exec backend python manage.py createsuperuser`. The local development database and its users are not included in the Git clone.
+### Instalação inicial do backend
 
-Start this Compose project before the frontend project because the latter joins the shared Docker network. The Django process runs under an unprivileged UID but is granted access to the host Docker socket. Docker socket access is effectively host administrator access; grant staff accounts only to trusted operators and keep this backend off public ports.
+Os comandos abaixo são executados na VPS, via SSH. Clone os dois projetos no mesmo diretório pai; inicie o backend antes do frontend, pois ele cria `rkd-network`:
+
+```bash
+git clone https://github.com/madrijkaard/rkd-container-core.git
+git clone https://github.com/madrijkaard/rkd-container-web.git
+cd rkd-container-core
+cp .env.example .env
+openssl rand -hex 48  # copie a saída para DJANGO_SECRET_KEY no .env
+nano .env
+chmod 600 .env
+sudo docker compose config --quiet
+sudo docker compose up -d --build
+sudo docker compose ps
+```
+
+Preencha o `.env` com **três valores reais**, sem os sinais `< >` dos exemplos:
+
+```dotenv
+DJANGO_SECRET_KEY=<chave_aleatoria_gerada_acima>
+TURNSTILE_SITE_KEY=<site_key_do_widget>
+TURNSTILE_SECRET_KEY=<secret_key_do_widget>
+```
+
+Mantenha `DJANGO_SECRET_KEY` estável: ela protege sessões e criptografa os tokens GitHub salvos. O Compose já define `DJANGO_DEBUG=False`, `DJANGO_ALLOWED_HOSTS=sinan-pro.com`, `TURNSTILE_ALLOWED_HOSTNAMES=sinan-pro.com` e `DJANGO_DB_PATH=/data/container_core.sqlite3`. Não é necessário criar essas variáveis no ambiente global do Ubuntu: o `.env` é passado ao container. Não coloque chaves no frontend, no Dockerfile, no Git ou em uma imagem Docker.
+
+O SQLite fica em **`rkd-container-core/volumes/sqlite/container_core.sqlite3` na VPS**, montado como `/data/container_core.sqlite3` no container. O backend cria a pasta e executa as migrations ao iniciar. O banco local de desenvolvimento e seus usuários não são enviados pelo Git. Para criar o primeiro operador no banco novo:
+
+```bash
+sudo docker compose exec backend python manage.py createsuperuser
+sudo docker compose logs --tail=100 backend
+```
+
+Depois, entre em `../rkd-container-web` e siga a seção de implantação do README do frontend para configurar `ACME_EMAIL`, iniciar Nginx e Certbot e acessar `https://sinan-pro.com/`.
+
+### Manutenção e cuidados
+
+Faça backup de `volumes/sqlite/container_core.sqlite3` **e** da `DJANGO_SECRET_KEY`, armazenando a chave separadamente. Se trocar a chave sem regravar os tokens, os tokens privados já salvos não poderão ser descriptografados. Ao atualizar este projeto, execute `git pull` e `sudo docker compose up -d --build` neste diretório. Consulte `sudo docker compose ps` e `sudo docker compose logs --tail=100 backend` se o backend não ficar saudável.
+
+O socket Docker dá ao backend controle efetivo sobre o host. Conceda acesso de operador (`staff`) somente a pessoas confiáveis e não exponha a porta 8000 publicamente.
 
 ## Backend image definition
 
