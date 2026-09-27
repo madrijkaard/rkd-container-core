@@ -27,10 +27,11 @@ DEBUG = os.environ.get('DJANGO_DEBUG', 'True').lower() == 'true'
 
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY')
-if not SECRET_KEY:
-    if not DEBUG:
-        raise ImproperlyConfigured('DJANGO_SECRET_KEY must be set when DJANGO_DEBUG=False.')
-    SECRET_KEY = 'django-insecure-local-development-only'
+if not SECRET_KEY or not SECRET_KEY.strip():
+    raise ImproperlyConfigured(
+        'DJANGO_SECRET_KEY não está configurada. Defina essa variável de ambiente '
+        'antes de iniciar o backend, inclusive em desenvolvimento.'
+    )
 
 ALLOWED_HOSTS = [host for host in os.environ.get('DJANGO_ALLOWED_HOSTS', '').split(',') if host]
 if not DEBUG and not ALLOWED_HOSTS:

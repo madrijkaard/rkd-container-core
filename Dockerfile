@@ -21,7 +21,8 @@ RUN pip install --no-cache-dir -r requirements.txt \
 
 COPY --chown=app:app . .
 RUN chmod +x /app/docker/entrypoint.sh \
-    && DJANGO_DEBUG=True python manage.py collectstatic --noinput
+    && DJANGO_DEBUG=True DJANGO_SECRET_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(64))')" \
+       python manage.py collectstatic --noinput
 
 EXPOSE 8000
 ENTRYPOINT ["/app/docker/entrypoint.sh"]

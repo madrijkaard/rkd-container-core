@@ -1,6 +1,14 @@
 #!/bin/sh
 set -eu
 
+case "${DJANGO_SECRET_KEY:-}" in
+    *[![:space:]]*) ;;
+    *)
+        echo 'Erro: DJANGO_SECRET_KEY não está configurada. Preencha o .env ou execute configure-secret-key.sh antes de iniciar o backend.' >&2
+        exit 1
+        ;;
+esac
+
 if [ ! -S /var/run/docker.sock ]; then
     echo 'Docker socket /var/run/docker.sock is unavailable.' >&2
     exit 1

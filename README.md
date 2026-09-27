@@ -14,6 +14,10 @@ SQLite stores data in `container_core.sqlite3` at the repository root by default
 
 ## Run locally
 
+`DJANGO_SECRET_KEY` é obrigatória em todos os ambientes, inclusive com `DJANGO_DEBUG=True`. Para executar Django diretamente, configure a variável no terminal antes dos comandos `manage.py`: no Git Bash, `export DJANGO_SECRET_KEY='<sua chave estável>'`; no PowerShell, `$env:DJANGO_SECRET_KEY='<sua chave estável>'`. Use a mesma chave em cada execução para preservar os tokens criptografados. O Django não carrega `.env` automaticamente na execução direta; no Docker, o Compose passa esse arquivo ao container.
+
+Tokens salvos anteriormente com a antiga chave padrão de desenvolvimento precisam ser cadastrados novamente ao configurar uma nova chave. Os demais registros do banco permanecem armazenados.
+
 From Git Bash on Windows:
 
 ```bash
@@ -71,6 +75,8 @@ TURNSTILE_SECRET_KEY=<secret_key_do_widget>
 ```
 
 Mantenha `DJANGO_SECRET_KEY` estável: ela protege sessões e criptografa os tokens GitHub salvos. O Compose já define `DJANGO_DEBUG=False`, `DJANGO_ALLOWED_HOSTS=sinan-pro.com`, `TURNSTILE_ALLOWED_HOSTNAMES=sinan-pro.com` e `DJANGO_DB_PATH=/data/container_core.sqlite3`. Não é necessário criar essas variáveis no ambiente global do Ubuntu: o `.env` é passado ao container. Não coloque chaves no frontend, no Dockerfile, no Git ou em uma imagem Docker.
+
+Se a variável estiver ausente, vazia ou contiver apenas espaços, o backend encerra a inicialização e escreve no terminal/log uma mensagem indicando que falta configurar `DJANGO_SECRET_KEY`. Não existe chave padrão de desenvolvimento. O build usa uma chave aleatória temporária apenas para `collectstatic`; ela não é configurada como variável de ambiente da imagem nem substitui a chave obrigatória em execução.
 
 ### Script para configurar DJANGO_SECRET_KEY
 
