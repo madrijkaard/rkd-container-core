@@ -56,24 +56,36 @@ Os comandos abaixo são executados na VPS, via SSH. Clone os dois projetos no me
 git clone https://github.com/madrijkaard/rkd-container-core.git
 git clone https://github.com/madrijkaard/rkd-container-web.git
 cd rkd-container-core
-cp .env.example .env
-openssl rand -hex 48  # copie a saída para DJANGO_SECRET_KEY no .env
+bash configure-secret-key.sh --generate-only
 nano .env
-chmod 600 .env
-sudo docker compose config --quiet
-sudo docker compose up -d --build
+sudo bash configure-secret-key.sh
 sudo docker compose ps
 ```
 
-Preencha o `.env` com **três valores reais**, sem os sinais `< >` dos exemplos:
+O script cria o `.env` a partir de `.env.example` se necessário e gera `DJANGO_SECRET_KEY` automaticamente. Preencha as **duas chaves Turnstile reais** no `.env`, sem os sinais `< >` dos exemplos:
 
 ```dotenv
-DJANGO_SECRET_KEY=<chave_aleatoria_gerada_acima>
+DJANGO_SECRET_KEY=<valor_gerado_pelo_script_nao_substitua>
 TURNSTILE_SITE_KEY=<site_key_do_widget>
 TURNSTILE_SECRET_KEY=<secret_key_do_widget>
 ```
 
 Mantenha `DJANGO_SECRET_KEY` estável: ela protege sessões e criptografa os tokens GitHub salvos. O Compose já define `DJANGO_DEBUG=False`, `DJANGO_ALLOWED_HOSTS=sinan-pro.com`, `TURNSTILE_ALLOWED_HOSTNAMES=sinan-pro.com` e `DJANGO_DB_PATH=/data/container_core.sqlite3`. Não é necessário criar essas variáveis no ambiente global do Ubuntu: o `.env` é passado ao container. Não coloque chaves no frontend, no Dockerfile, no Git ou em uma imagem Docker.
+
+### Script para configurar DJANGO_SECRET_KEY
+
+`configure-secret-key.sh`, na raiz deste projeto, gera 48 bytes aleatórios com OpenSSL e grava sua representação hexadecimal (96 caracteres) em `.env`, com permissão `600`. A chave não é exibida na saída. Ao executar sem opções, o script usa o `env_file` do Compose para criar/recriar o backend com a variável, aguarda o container ficar saudável e confirma a presença de `DJANGO_SECRET_KEY` sem revelar o valor. A recriação causa uma breve interrupção do backend e preserva o SQLite montado.
+
+```bash
+bash configure-secret-key.sh --generate-only  # somente prepara o .env
+sudo bash configure-secret-key.sh            # aplica no container
+```
+
+Rodar o script novamente preserva uma chave já configurada e os demais valores do `.env`. Se houver SQLite em `volumes/sqlite/` e a chave estiver ausente, ele interrompe a geração e pede a restauração da chave original. Não apague ou substitua uma chave usada por tokens existentes. O script exige as duas chaves Turnstile antes de iniciar o backend em produção.
+
+Uma variável exportada em uma sessão `docker exec` só afeta aquela sessão. Para que o processo Django receba a variável e ela continue configurada em containers futuros, o script persiste o valor no `.env` e recria o serviço pelo Compose. Consulte a documentação de [variáveis no container](https://docs.docker.com/compose/how-tos/environment-variables/set-environment-variables/) e de [recriação com Compose](https://docs.docker.com/reference/cli/docker/compose/up/).
+
+### Persistência e primeiro usuário
 
 O SQLite fica em **`rkd-container-core/volumes/sqlite/container_core.sqlite3` na VPS**, montado como `/data/container_core.sqlite3` no container. O backend cria a pasta e executa as migrations ao iniciar. O banco local de desenvolvimento e seus usuários não são enviados pelo Git. Para criar o primeiro operador no banco novo:
 
@@ -92,7 +104,7 @@ O socket Docker dá ao backend controle efetivo sobre o host. Conceda acesso de 
 
 ## Backend image definition
 
-This repository has no Dockerfile. Save Dockerfile text in an `image` record's `definition` field, then create a setup linked to that image. Without a GitHub repository, the API builds with the backend repository root as its context. With a repository, it checks out the selected branch into a temporary directory and uses that source tree as the context. The Dockerfile can use `COPY . /app` to include the selected branch. The backend `.dockerignore` applies only when the backend repository is the context; a linked repository can supply its own `.dockerignore`.
+The repository's `Dockerfile` deploys Container Core itself. For a container managed by the application, save Dockerfile text in an `image` record's `definition` field, then create a setup linked to that image. Without a GitHub repository, the API builds with the backend repository root as its context. With a repository, it checks out the selected branch into a temporary directory and uses that source tree as the context. The Dockerfile can use `COPY . /app` to include the selected branch. The backend `.dockerignore` applies only when the backend repository is the context; a linked repository can supply its own `.dockerignore`.
 
 For a backend image, use Python 3.12, install `requirements.txt`, include the application source, run migrations at startup, and serve `container_core.wsgi:application` with Gunicorn. Set `DJANGO_DB_PATH` to a path such as `/data/container_core.sqlite3`. The setup determines whether to mount a named volume at `/data` and publish a port. The image needs the Docker CLI only if it will itself call the container creation endpoint; the CLI also needs a reachable daemon and appropriate credentials at runtime.
 
