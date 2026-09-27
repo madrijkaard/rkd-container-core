@@ -1,0 +1,35 @@
+services:
+  backend:
+    build: .
+    init: true
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DJANGO_DEBUG: "False"
+      DJANGO_ALLOWED_HOSTS: sinan-pro.com
+      DJANGO_DB_PATH: /data/container_core.sqlite3
+      DJANGO_TRUST_PROXY_HEADERS: "True"
+      TURNSTILE_ALLOWED_HOSTNAMES: sinan-pro.com
+    volumes:
+      - ./volumes/sqlite:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      rkd-network:
+        aliases:
+          - rkd-backend
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; request=urllib.request.Request('http://127.0.0.1:8000/', headers={'Host': 'sinan-pro.com'}); urllib.request.urlopen(request, timeout=5)",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+networks:
+  rkd-network:
+    name: rkd-network
