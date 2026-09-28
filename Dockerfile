@@ -1,10 +1,16 @@
 FROM python:3.12-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PIP_CERT=/etc/ssl/certs/ca-certificates.crt
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl git gnupg gosu passwd \
+    && rm -rf /var/lib/apt/lists/*
+
+# Optional public CA certificates for networks that inspect HTTPS traffic.
+COPY docker/certificates/ /usr/local/share/ca-certificates/
+RUN update-ca-certificates \
     && install -m 0755 -d /etc/apt/keyrings \
     && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
     && chmod a+r /etc/apt/keyrings/docker.asc \

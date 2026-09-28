@@ -2,6 +2,7 @@ name: rkd-core-local
 
 services:
   backend:
+    image: rkd-core-local-backend:latest
     build: .
     init: true
     restart: unless-stopped

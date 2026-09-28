@@ -115,8 +115,18 @@ if [[ "$local_mode" == true ]]; then
 fi
 compose=(docker compose --env-file "$env_file" -f "$compose_file")
 "${compose[@]}" config --quiet
+build_option=--build
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+        if [[ "$local_mode" == true ]]; then
+            # Avoid Compose/Bake metadata-file replacement failures on Windows.
+            docker build -t rkd-core-local-backend:latest "$script_dir"
+            build_option=--no-build
+        fi
+        ;;
+esac
 echo 'Iniciando/recriando o backend com as variáveis do .env; aguarde a verificação de saúde.'
-if ! "${compose[@]}" up -d --build --force-recreate --wait --wait-timeout 180 backend; then
+if ! "${compose[@]}" up -d "$build_option" --force-recreate --wait --wait-timeout 180 backend; then
     echo "Erro ao iniciar o backend. A chave foi preservada; confira docker compose -f $compose_file logs backend." >&2
     exit 1
 fi

@@ -40,17 +40,20 @@ A ordem é: **gerar/preservar a chave no `.env` → criar o backend → criar o 
 
 ```bash
 bash configure-secret-key.sh --generate-only
-docker compose -f docker-compose.local.yml up -d --build --wait
+docker build -t rkd-core-local-backend:latest .
+docker compose -f docker-compose.local.yml up -d --no-build --wait
 docker compose -f docker-compose.local.yml exec backend python manage.py createsuperuser --username RKD
 ```
 
-O primeiro comando só prepara o `.env` e não chama Docker. O segundo constrói a imagem e cria o container já com `DJANGO_SECRET_KEY`, usando `env_file: .env`. Para gerar/preservar a chave e iniciar o backend em uma única execução, use `bash configure-secret-key.sh --local` e depois crie o usuário. Se o usuário já existir, pule o comando `createsuperuser`.
+O primeiro comando só prepara o `.env` e não chama Docker. O segundo constrói a imagem, e o terceiro cria o container já com `DJANGO_SECRET_KEY`, usando `env_file: .env`. No Windows, separar build e subida evita um possível erro de renomeação de arquivo temporário de metadados do Compose/Bake (`Identificador inválido`). Para gerar/preservar a chave e iniciar o backend em uma única execução, use `bash configure-secret-key.sh --local` e depois crie o usuário; no Git Bash, o script também separa build e subida. Se o usuário já existir, pule o comando `createsuperuser`.
 
 Em seguida, na raiz do frontend:
 
 ```bash
 cd ../rkd-container-web
-docker compose -f docker-compose.local.yml up -d --build
+docker build -t rkd-web-local-frontend:latest .
+docker build -t rkd-web-local-nginx:latest -f Dockerfile.proxy.local .
+docker compose -f docker-compose.local.yml up -d --no-build
 ```
 
 Abra **http://localhost:8080/**. O Compose local usa a rede `rkd-local-network`, criada pelo backend, e mantém a porta 8000 interna. Ele desativa Turnstile apenas nesse modo de desenvolvimento e permite os cookies de login em HTTP; não exige um widget, certificado HTTPS ou `.env` do frontend. A chave Django continua obrigatória. Os containers gerenciados pelo sistema serão criados no Docker local.
@@ -65,6 +68,16 @@ docker compose -f docker-compose.local.yml logs -f backend
 ```
 
 Use `-f docker-compose.local.yml` em todos os comandos locais. Executar o script sem `--local` ou o Compose sem `-f` seleciona a configuração da VPS.
+
+### Erro de certificado HTTPS durante o build
+
+Se o build apresentar `curl: (60) SSL certificate problem: self-signed certificate in certificate chain`, um proxy ou antivírus pode estar assinando as conexões com uma CA que é confiável no Windows, mas está ausente na imagem Linux. Identifique o emissor da cadeia HTTPS e use apenas sua CA pública já confiável no host. Consulte o procedimento de [certificados CA no Docker](https://docs.docker.com/engine/network/ca-certs/).
+
+No Windows, abra `certmgr.msc`, acesse **Autoridades de Certificação Raiz Confiáveis → Certificados** e exporte a CA identificada como **X.509 codificado em Base64**, sem chave privada. Salve o resultado com extensão `.crt` em `docker/certificates/` deste repositório. Não use o certificado de servidor de `download.docker.com` como CA e não desative a verificação SSL. Se o certificado estiver no armazenamento da máquina em vez do usuário, use `certlm.msc`.
+
+O Dockerfile instala os `.crt` antes dos downloads HTTPS e o pip usa o bundle completo do sistema. Os certificados locais são ignorados pelo Git; a pasta fica vazia em um clone novo, até você adicionar a CA necessária naquele ambiente. Para reconstruir localmente, execute `docker build -t rkd-core-local-backend:latest .` e depois `docker compose -f docker-compose.local.yml up -d --no-build --wait`. O backend preserva o `.env` e o SQLite durante essa operação.
+
+Se a mesma inspeção HTTPS atingir o frontend, copie a mesma CA para `rkd-container-web/docker/certificates/`, conforme o README daquele projeto. Na VPS, só adicione uma CA extra se a rede da VPS também exigir essa confiança.
 
 ## Deploy on the Ubuntu VPS with Docker Compose
 
