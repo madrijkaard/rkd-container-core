@@ -34,7 +34,7 @@ The initial JSON response is available at `http://127.0.0.1:8000/`.
 
 ## Testar localmente com Docker
 
-Use Docker Desktop com **containers Linux** e Docker Compose. Para executar o script Bash no Windows, use um terminal Ubuntu/WSL com a [integração do Docker Desktop](https://docs.docker.com/desktop/features/wsl/) habilitada. Para melhor compatibilidade de permissões e volumes, mantenha os clones no sistema de arquivos Linux do WSL. Os comandos seguintes são executados na raiz do backend.
+Use Docker Desktop com **containers Linux** e Docker Compose. Você pode gerar a chave pelo **Git Bash no Windows**, com OpenSSL disponível (`openssl version`). Também pode executar o script em Ubuntu/WSL com a [integração do Docker Desktop](https://docs.docker.com/desktop/features/wsl/) habilitada. Para melhor compatibilidade de permissões e volumes, prefira os clones no sistema de arquivos Linux do WSL. Os comandos seguintes são executados na raiz do backend; depois da geração, os comandos `docker compose` também podem ser executados no PowerShell.
 
 A ordem é: **gerar/preservar a chave no `.env` → criar o backend → criar o usuário → iniciar frontend e Nginx**. Nenhum container do backend precisa existir para gerar a chave:
 

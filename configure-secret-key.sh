@@ -65,14 +65,22 @@ else
         exit 1
     fi
     if ! command -v openssl >/dev/null 2>&1; then
-        echo 'Erro: instale OpenSSL (sudo apt install openssl).' >&2
+        echo 'Erro: OpenSSL não encontrado. Use Git Bash com OpenSSL no Windows; no Ubuntu, sudo apt install openssl.' >&2
         exit 1
     fi
     generated_key="$(openssl rand -hex 48)"
     temporary_file="$(mktemp "$script_dir/.env.tmp.XXXXXX")"
     awk '!/^[[:space:]]*DJANGO_SECRET_KEY[[:space:]]*=/' "$env_file" > "$temporary_file"
     printf 'DJANGO_SECRET_KEY=%s\n' "$generated_key" >> "$temporary_file"
-    mv -- "$temporary_file" "$env_file"
+    # Git Bash on Windows can reject replacing an existing file with mv.
+    # This write happens only when no key or persisted SQLite already exists.
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*)
+            cp -- "$temporary_file" "$env_file"
+            rm -- "$temporary_file"
+            ;;
+        *) mv -- "$temporary_file" "$env_file" ;;
+    esac
     temporary_file=''
     unset generated_key
     echo 'Chave aleatória gerada e salva no .env (permissão 600).'
@@ -93,7 +101,7 @@ if [[ "$local_mode" == false ]]; then
     done
 fi
 if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>&1; then
-    echo 'Erro: instale Docker Engine e o plugin Docker Compose na VPS.' >&2
+    echo 'Erro: configure Docker Engine/Docker Desktop e o plugin Docker Compose.' >&2
     exit 1
 fi
 if ! docker info >/dev/null 2>&1; then
