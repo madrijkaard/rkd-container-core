@@ -1,0 +1,37 @@
+name: rkd-core-local
+
+services:
+  backend:
+    build: .
+    init: true
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DJANGO_DEBUG: "True"
+      DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1,rkd-backend
+      DJANGO_DB_PATH: /data/container_core.local.sqlite3
+      DJANGO_TRUST_PROXY_HEADERS: "False"
+      TURNSTILE_SITE_KEY: ""
+      TURNSTILE_SECRET_KEY: ""
+      TURNSTILE_ALLOWED_HOSTNAMES: ""
+    volumes:
+      - ./volumes/sqlite:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      rkd-local-network:
+        aliases:
+          - rkd-backend
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; request=urllib.request.Request('http://127.0.0.1:8000/', headers={'Host': 'localhost'}); urllib.request.urlopen(request, timeout=5)"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+networks:
+  rkd-local-network:
+    name: rkd-local-network

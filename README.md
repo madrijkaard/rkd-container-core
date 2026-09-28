@@ -32,6 +32,40 @@ From PowerShell, use `.\.venv\Scripts\python.exe` in place of `./.venv/Scripts/p
 
 The initial JSON response is available at `http://127.0.0.1:8000/`.
 
+## Testar localmente com Docker
+
+Use Docker Desktop com **containers Linux** e Docker Compose. Para executar o script Bash no Windows, use um terminal Ubuntu/WSL com a [integração do Docker Desktop](https://docs.docker.com/desktop/features/wsl/) habilitada. Para melhor compatibilidade de permissões e volumes, mantenha os clones no sistema de arquivos Linux do WSL. Os comandos seguintes são executados na raiz do backend.
+
+A ordem é: **gerar/preservar a chave no `.env` → criar o backend → criar o usuário → iniciar frontend e Nginx**. Nenhum container do backend precisa existir para gerar a chave:
+
+```bash
+bash configure-secret-key.sh --generate-only
+docker compose -f docker-compose.local.yml up -d --build --wait
+docker compose -f docker-compose.local.yml exec backend python manage.py createsuperuser --username RKD
+```
+
+O primeiro comando só prepara o `.env` e não chama Docker. O segundo constrói a imagem e cria o container já com `DJANGO_SECRET_KEY`, usando `env_file: .env`. Para gerar/preservar a chave e iniciar o backend em uma única execução, use `bash configure-secret-key.sh --local` e depois crie o usuário. Se o usuário já existir, pule o comando `createsuperuser`.
+
+Em seguida, na raiz do frontend:
+
+```bash
+cd ../rkd-container-web
+docker compose -f docker-compose.local.yml up -d --build
+```
+
+Abra **http://localhost:8080/**. O Compose local usa a rede `rkd-local-network`, criada pelo backend, e mantém a porta 8000 interna. Ele desativa Turnstile apenas nesse modo de desenvolvimento e permite os cookies de login em HTTP; não exige um widget, certificado HTTPS ou `.env` do frontend. A chave Django continua obrigatória. Os containers gerenciados pelo sistema serão criados no Docker local.
+
+O SQLite local fica em `volumes/sqlite/container_core.local.sqlite3` e é preservado ao recriar o backend. Ele é separado do arquivo usado pelo Compose da VPS e do banco de desenvolvimento na raiz; por isso os usuários e registros desses outros bancos não aparecem automaticamente. O script preserva a chave existente e recusa gerar outra se encontrar um SQLite persistido sem a chave original.
+
+Para consultar o backend local:
+
+```bash
+docker compose -f docker-compose.local.yml ps
+docker compose -f docker-compose.local.yml logs -f backend
+```
+
+Use `-f docker-compose.local.yml` em todos os comandos locais. Executar o script sem `--local` ou o Compose sem `-f` seleciona a configuração da VPS.
+
 ## Deploy on the Ubuntu VPS with Docker Compose
 
 Este repositório tem seu próprio `docker-compose.yml`. Ele inicia Django e cria a rede `rkd-network`, compartilhada com o Compose do frontend. A imagem do backend inclui Git e o cliente Docker; ela usa o Docker Engine **da VPS** pelo socket `/var/run/docker.sock`, sem iniciar outro daemon. A porta 8000 permanece interna à rede Docker. O Nginx do frontend encaminha `/api/`, `/admin/` e `/static/` para o backend.
@@ -85,6 +119,7 @@ Se a variável estiver ausente, vazia ou contiver apenas espaços, o backend enc
 ```bash
 bash configure-secret-key.sh --generate-only  # somente prepara o .env
 sudo bash configure-secret-key.sh            # aplica no container
+bash configure-secret-key.sh --local         # aplica no container local
 ```
 
 Rodar o script novamente preserva uma chave já configurada e os demais valores do `.env`. Se houver SQLite em `volumes/sqlite/` e a chave estiver ausente, ele interrompe a geração e pede a restauração da chave original. Não apague ou substitua uma chave usada por tokens existentes. O script exige as duas chaves Turnstile antes de iniciar o backend em produção.
