@@ -1,5 +1,6 @@
 services:
   backend:
+    container_name: rkd-dockestra-core-1
     build: .
     init: true
     restart: unless-stopped
@@ -7,7 +8,7 @@ services:
     environment:
       DJANGO_DEBUG: "False"
       DJANGO_ALLOWED_HOSTS: sinan-pro.com
-      DJANGO_DB_PATH: /data/container_core.sqlite3
+      DJANGO_DB_PATH: /data/rkd_dockestra_core.sqlite3
       DJANGO_TRUST_PROXY_HEADERS: "True"
       TURNSTILE_ALLOWED_HOSTNAMES: sinan-pro.com
     volumes:

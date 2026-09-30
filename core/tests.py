@@ -13,8 +13,8 @@ from django.contrib.auth import get_user_model
 
 from .docker_service import BUILD_CONTEXT
 from .github_branches import parse_github_repository
-from .models import Environment, Image, Project, Setup
-from .token_cipher import decrypt_token, encrypt_token
+from .models import Environment, Image, Instance, Project, Setup
+from .token_cipher import _cipher, decrypt_token, encrypt_token
 from .turnstile import verify_turnstile
 
 
@@ -31,7 +31,14 @@ class HomeTests(TestCase):
         response = self.client.get(reverse('home'))
 
         self.assertEqual(response.status_code, 200)
-        self.assertJSONEqual(response.content, {'name': 'Container Core', 'status': 'ready'})
+        self.assertJSONEqual(response.content, {'name': 'Dockestra Core', 'status': 'ready'})
+
+
+class TokenCipherCompatibilityTests(TestCase):
+    def test_legacy_encrypted_token_remains_readable(self):
+        encrypted = _cipher('container-core:image-token:').encrypt(b'old-token').decode()
+        self.assertEqual(decrypt_token(encrypted), 'old-token')
+        self.assertEqual(decrypt_token(encrypt_token('new-token')), 'new-token')
 
 
 class ApiAuthTests(TestCase):
@@ -193,7 +200,10 @@ class ContainerApiTests(TestCase):
         response = self.client.post(f'/api/setups/{self.setup.pk}/containers/')
         self.assertEqual(response.status_code, 201, response.content)
         self.assertEqual(response.json()['container_id'], 'container-id')
-        self.assertTrue(response.json()['container_name'].startswith('container-core-setup-'))
+        self.assertEqual(response.json()['container_name'], 'SERVER-replica-1')
+        self.assertEqual(response.json()['code'], 'SERVER-replica-1')
+        self.assertEqual(response.json()['port'], '127.0.0.1:8000:8000')
+        self.assertEqual(Instance.objects.get(pk=response.json()['id']).container_id, 'container-id')
         build_args, build_kwargs = run.call_args_list[1]
         self.assertEqual(build_args[0][1:3], ['build', '--tag'])
         self.assertEqual(build_args[0][-3:], ['--file', '-', str(BUILD_CONTEXT)])
@@ -515,11 +525,50 @@ class GithubBranchTests(TestCase):
             'https://github.com/owner/repo/tree/main',
             'https://github.com/owner/repo?token=secret',
         ):
-            with self.subTest(repository=repository):
-                response = self.client.get('/api/github/branches/', {'repository': repository})
-                self.assertEqual(response.status_code, 400)
-                self.assertEqual(response.json()['code'], 'invalid_repository')
+            for endpoint in ('branches', 'description'):
+                with self.subTest(repository=repository, endpoint=endpoint):
+                    response = self.client.get(f'/api/github/{endpoint}/', {'repository': repository})
+                    self.assertEqual(response.status_code, 400)
+                    self.assertEqual(response.json()['code'], 'invalid_repository')
         self.assertEqual(parse_github_repository('https://github.com/owner/repo.git'), ('owner', 'repo'))
+
+    @patch('core.github_branches.urlopen')
+    def test_reads_about_description_and_caches_it(self, urlopen):
+        urlopen.return_value = BytesIO(b'{"description":"A survivor game engine"}')
+        url = '/api/github/description/'
+        repository = 'https://github.com/madrijkaard/rkd-survivor-engine'
+        response = self.client.get(url, {'repository': repository})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {'description': 'A survivor game engine'})
+        self.assertEqual(urlopen.call_args.args[0].full_url,
+                         'https://api.github.com/repos/madrijkaard/rkd-survivor-engine')
+        self.assertEqual(self.client.get(url, {'repository': repository}).json(), response.json())
+        self.assertEqual(urlopen.call_count, 1)
+
+    @patch('core.github_branches.urlopen')
+    def test_description_without_about_is_empty(self, urlopen):
+        urlopen.return_value = BytesIO(b'{"description":null}')
+        response = self.client.get('/api/github/description/', {
+            'repository': 'https://github.com/owner/no-about',
+        })
+        self.assertEqual(response.json(), {'description': ''})
+
+    @patch('core.github_branches.urlopen')
+    def test_private_description_uses_saved_token(self, urlopen):
+        project = Project.objects.create(code='PRJ', description='Project')
+        environment = Environment.objects.create(project=project, code='DEV', description='Dev')
+        image = Image.objects.create(
+            environment=environment, code='PRIVATE', description='Private',
+            definition='FROM alpine', repository='https://github.com/owner/private-repo',
+            branch='main', isPrivate=1, token=encrypt_token('secret-token'),
+        )
+        urlopen.return_value = BytesIO(b'{"description":"Private About"}')
+        response = self.client.post('/api/github/description/', {
+            'repository': image.repository, 'image_id': image.pk,
+        }, content_type='application/json')
+        self.assertEqual(response.json(), {'description': 'Private About'})
+        self.assertNotIn('secret-token', response.content.decode())
+        self.assertEqual(urlopen.call_args.args[0].get_header('Authorization'), 'Bearer secret-token')
 
     @patch('core.github_branches.urlopen')
     def test_lists_all_pages_and_caches_result(self, urlopen):

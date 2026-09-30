@@ -2,6 +2,7 @@ name: rkd-core-local
 
 services:
   backend:
+    container_name: rkd-dockestra-core-local-1
     image: rkd-core-local-backend:latest
     build: .
     init: true
@@ -10,7 +11,7 @@ services:
     environment:
       DJANGO_DEBUG: "True"
       DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1,rkd-backend
-      DJANGO_DB_PATH: /data/container_core.local.sqlite3
+      DJANGO_DB_PATH: /data/rkd_dockestra_core.local.sqlite3
       DJANGO_TRUST_PROXY_HEADERS: "False"
       TURNSTILE_SITE_KEY: ""
       TURNSTILE_SECRET_KEY: ""

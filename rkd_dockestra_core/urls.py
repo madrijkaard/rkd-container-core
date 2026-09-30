@@ -1,5 +1,5 @@
 """
-URL configuration for container_core project.
+URL configuration for rkd_dockestra_core project.
 
 The `urlpatterns` list routes URLs to views. For more information please see:
     https://docs.djangoproject.com/en/6.0/topics/http/urls/
@@ -19,7 +19,7 @@ from django.urls import path
 
 from core.views import home
 from core.auth_views import session, sign_in, sign_out
-from core.api import collection, cpu_capacity, detail, github_branches, memory_capacity, project_setups, setup_container
+from core.api import collection, cpu_capacity, detail, github_branches, github_description, instance_detail, memory_capacity, project_setups, setup_container, setup_instances
 
 urlpatterns = [
     path('', home, name='home'),
@@ -29,6 +29,7 @@ urlpatterns = [
     path('api/system/cpu/', cpu_capacity, name='cpu-capacity'),
     path('api/system/memory/', memory_capacity, name='memory-capacity'),
     path('api/github/branches/', github_branches, name='github-branches'),
+    path('api/github/description/', github_description, name='github-description'),
     path('api/projects/', collection, {'resource': 'projects'}, name='projects'),
     path('api/projects/<int:pk>/', detail, {'resource': 'projects'}, name='project-detail'),
     path('api/projects/<int:parent_id>/environments/', collection, {'resource': 'environments'}, name='project-environments'),
@@ -39,5 +40,7 @@ urlpatterns = [
     path('api/images/<int:parent_id>/setups/', collection, {'resource': 'setups'}, name='image-setups'),
     path('api/setups/<int:pk>/', detail, {'resource': 'setups'}, name='setup-detail'),
     path('api/setups/<int:pk>/containers/', setup_container, name='setup-container'),
+    path('api/setups/<int:pk>/instances/', setup_instances, name='setup-instances'),
+    path('api/instances/<int:pk>/', instance_detail, name='instance-detail'),
     path('admin/', admin.site.urls),
 ]

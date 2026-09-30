@@ -2,4 +2,4 @@ from django.http import JsonResponse
 
 
 def home(request):
-    return JsonResponse({'name': 'Container Core', 'status': 'ready'})
+    return JsonResponse({'name': 'Dockestra Core', 'status': 'ready'})

@@ -1,4 +1,4 @@
-"""Read branch names from GitHub repositories."""
+"""Read repository metadata and branch names from GitHub."""
 
 import hashlib
 import json
@@ -52,6 +52,49 @@ def parse_github_repository(repository):
     return owner, repo
 
 
+def _github_json(url, token):
+    headers = {
+        'Accept': 'application/vnd.github+json',
+        'User-Agent': 'Dockestra-Core',
+    }
+    if token:
+        headers['Authorization'] = f'Bearer {token}'
+    request = Request(url, headers=headers)
+    try:
+        with urlopen(request, timeout=10) as response:
+            return json.load(response)
+    except HTTPError as error:
+        if error.code == 404:
+            raise GithubBranchError('repository_not_found', 'Repositório não encontrado ou sem acesso no GitHub.', 404) from None
+        if error.code == 401:
+            raise GithubBranchError('github_invalid_token', 'Token do GitHub inválido ou expirado.', 401) from None
+        if error.code == 429 or (error.code == 403 and error.headers and error.headers.get('X-RateLimit-Remaining') == '0'):
+            raise GithubBranchError('github_rate_limited', 'Limite de consultas ao GitHub atingido. Tente novamente mais tarde.', 429) from None
+        if error.code == 403:
+            raise GithubBranchError('github_access_denied', 'O token não tem acesso a este repositório.', 403) from None
+        raise GithubBranchError('github_unavailable', 'Não foi possível consultar o GitHub.', 502) from None
+    except (URLError, TimeoutError, OSError):
+        raise GithubBranchError('github_unavailable', 'Não foi possível conectar ao GitHub.', 503) from None
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise GithubBranchError('github_unavailable', 'Resposta inválida do GitHub.', 502) from None
+
+
+def get_github_description(repository, token=None):
+    owner, repo = parse_github_repository(repository)
+    credential_id = hashlib.sha256(token.encode()).hexdigest() if token else 'public'
+    cache_key = f'github-description:{owner.lower()}/{repo.lower()}:{credential_id}'
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+    details = _github_json(f'https://api.github.com/repos/{owner}/{repo}', token)
+    if (not isinstance(details, dict) or 'description' not in details
+            or not isinstance(details['description'], (str, type(None)))):
+        raise GithubBranchError('github_unavailable', 'Resposta inválida do GitHub.', 502)
+    description = details['description'] or ''
+    cache.set(cache_key, description, 300)
+    return description
+
+
 def list_github_branches(repository, token=None):
     owner, repo = parse_github_repository(repository)
     credential_id = hashlib.sha256(token.encode()).hexdigest() if token else 'public'
@@ -63,30 +106,7 @@ def list_github_branches(repository, token=None):
     branches = []
     for page in range(1, MAX_PAGES + 1):
         url = f'https://api.github.com/repos/{owner}/{repo}/branches?per_page={PAGE_SIZE}&page={page}'
-        headers = {
-            'Accept': 'application/vnd.github+json',
-            'User-Agent': 'Container-Core',
-        }
-        if token:
-            headers['Authorization'] = f'Bearer {token}'
-        request = Request(url, headers=headers)
-        try:
-            with urlopen(request, timeout=10) as response:
-                items = json.load(response)
-        except HTTPError as error:
-            if error.code == 404:
-                raise GithubBranchError('repository_not_found', 'Repositório não encontrado ou sem acesso no GitHub.', 404) from None
-            if error.code == 401:
-                raise GithubBranchError('github_invalid_token', 'Token do GitHub inválido ou expirado.', 401) from None
-            if error.code == 429 or (error.code == 403 and error.headers.get('X-RateLimit-Remaining') == '0'):
-                raise GithubBranchError('github_rate_limited', 'Limite de consultas ao GitHub atingido. Tente novamente mais tarde.', 429) from None
-            if error.code == 403:
-                raise GithubBranchError('github_access_denied', 'O token não tem acesso a este repositório.', 403) from None
-            raise GithubBranchError('github_unavailable', 'Não foi possível consultar o GitHub.', 502) from None
-        except (URLError, TimeoutError, OSError):
-            raise GithubBranchError('github_unavailable', 'Não foi possível conectar ao GitHub.', 503) from None
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            raise GithubBranchError('github_unavailable', 'Resposta inválida do GitHub.', 502) from None
+        items = _github_json(url, token)
         if not isinstance(items, list) or any(not isinstance(item, dict) or not isinstance(item.get('name'), str) for item in items):
             raise GithubBranchError('github_unavailable', 'Resposta inválida do GitHub.', 502)
         branches.extend(item['name'] for item in items)

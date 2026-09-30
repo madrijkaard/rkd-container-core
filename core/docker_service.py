@@ -96,7 +96,19 @@ def clone_repository(image, destination):
     shutil.rmtree(destination / '.git', ignore_errors=True)
 
 
-def create_container(setup):
+def replica_port_binding(value, number):
+    """Offset only the host port by the persistent replica number."""
+    published = port_binding(value)
+    if not published:
+        return None
+    address, host_port, container_port = published.split(':')
+    host_port = int(host_port) + number - 1
+    if host_port > 65535:
+        raise ValidationError('A porta desta réplica excede o limite de 65535. Altere a porta inicial do setup.')
+    return f'{address}:{host_port}:{container_port}'
+
+
+def create_container(setup, name, number):
     """Return the new container identity; never pass stored text to a shell."""
     docker = shutil.which('docker')
     if docker is None:
@@ -121,15 +133,19 @@ def create_container(setup):
     cpus = cpu_limit(setup.cpu, cpu_maximum)
     memory = memory_limit(setup.memory, memory_maximum)
     try:
-        published_port = port_binding(setup.port)
+        published_port = replica_port_binding(setup.port, number)
         mounted_volume = volume_mount(setup.volume)
     except ValidationError as error:
         raise ContainerCreationError('invalid_configuration', error.messages[0], 400) from None
     if not setup.image.definition.strip():
         raise ContainerCreationError('invalid_definition', 'Image definition is empty.', 400)
 
-    name = f'container-core-setup-{setup.pk}-{uuid4().hex[:12]}'
-    workspace = tempfile.TemporaryDirectory(prefix='container-core-source-') if setup.image.repository else nullcontext(None)
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', name):
+        raise ContainerCreationError(
+            'invalid_configuration', 'O código do setup deve formar um nome Docker válido.', 400
+        )
+    image_tag = f'rkd-dockestra-core-setup-{setup.pk}-{uuid4().hex[:12]}'
+    workspace = tempfile.TemporaryDirectory(prefix='rkd-dockestra-core-source-') if setup.image.repository else nullcontext(None)
     with workspace as temporary_root:
         context = BUILD_CONTEXT
         if temporary_root:
@@ -137,7 +153,7 @@ def create_container(setup):
             clone_repository(setup.image, context)
         try:
             built = subprocess.run(
-                [docker, 'build', '--tag', name, '--file', '-', str(context)],
+                [docker, 'build', '--tag', image_tag, '--file', '-', str(context)],
                 input=setup.image.definition, capture_output=True, text=True,
                 timeout=600, check=False,
             )
@@ -153,7 +169,7 @@ def create_container(setup):
                 run_args.extend(['--publish', published_port])
             if mounted_volume:
                 run_args.extend(['--mount', mounted_volume])
-            run_args.append(name)
+            run_args.append(image_tag)
             started = subprocess.run(
                 run_args,
                 capture_output=True, text=True, timeout=30, check=False,
@@ -161,5 +177,30 @@ def create_container(setup):
         except (OSError, subprocess.TimeoutExpired):
             raise ContainerCreationError('container_start_failed', 'Container start failed.', 502) from None
         if started.returncode != 0 or not started.stdout.strip():
+            if published_port and any(message in started.stderr.lower() for message in
+                                      ('port is already allocated', 'address already in use')):
+                raise ContainerCreationError(
+                    'port_unavailable',
+                    f'A porta {published_port} desta réplica já está ocupada. Altere a porta inicial do setup.',
+                    409,
+                )
             raise ContainerCreationError('container_start_failed', 'Container start failed.', 502)
-    return {'container_id': started.stdout.strip(), 'container_name': name}
+    return {'container_id': started.stdout.strip(), 'container_name': name, 'port': published_port or ''}
+
+
+def remove_container(container_id):
+    """Remove only the recorded Docker container, preserving named volumes."""
+    docker = shutil.which('docker')
+    if docker is None:
+        raise ContainerCreationError('docker_unavailable', 'Docker is unavailable.', 503)
+    try:
+        result = subprocess.run(
+            [docker, 'container', 'rm', '--force', container_id],
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        raise ContainerCreationError('container_delete_failed', 'Não foi possível excluir o container.', 502) from None
+    if result.returncode != 0:
+        # A container removed outside this application can still be unregistered.
+        if 'no such container' not in result.stderr.lower():
+            raise ContainerCreationError('container_delete_failed', 'Não foi possível excluir o container. Confira o Docker.', 502)

@@ -115,6 +115,23 @@ class Setup(BaseRecord):
     memory = models.CharField(max_length=15)
     port = models.CharField(max_length=50, blank=True, default='', validators=[port_binding])
     volume = models.CharField(max_length=255, blank=True, default='', validators=[volume_mount])
+    # Retained for existing databases; replica numbering now uses free slots.
+    last_instance_number = models.PositiveBigIntegerField(default=0, editable=False)
 
     class Meta:
         db_table = "setup"
+
+
+class Instance(BaseRecord):
+    code = models.CharField(max_length=128, unique=True, editable=False)
+    setup = models.ForeignKey(Setup, on_delete=models.PROTECT, related_name='instances')
+    number = models.PositiveBigIntegerField(editable=False)
+    container_id = models.CharField(max_length=64, blank=True, default='', editable=False)
+    port = models.CharField(max_length=50, blank=True, default='', editable=False)
+
+    class Meta:
+        db_table = "instance"
+        ordering = ('number',)
+        constraints = [
+            models.UniqueConstraint(fields=('setup', 'number'), name='unique_instance_number_per_setup'),
+        ]

@@ -1,17 +1,18 @@
-"""JSON CRUD endpoints for the Container Core hierarchy."""
+"""JSON CRUD endpoints for the Dockestra Core hierarchy."""
 
 import json
 
-from django.db.models import ProtectedError
+from django.db import IntegrityError, transaction
+from django.db.models import F, ProtectedError
 from django.forms import modelform_factory
 from django.http import HttpResponseNotAllowed, JsonResponse
 from django.views.decorators.csrf import ensure_csrf_cookie
 
 from .cpu_resources import available_cpu_capacity
-from .docker_service import ContainerCreationError, cpu_limit, create_container, memory_limit
-from .github_branches import GithubBranchError, list_github_branches, parse_github_repository
+from .docker_service import ContainerCreationError, cpu_limit, create_container, memory_limit, remove_container
+from .github_branches import GithubBranchError, get_github_description, list_github_branches, parse_github_repository
 from .memory_resources import available_memory_capacity
-from .models import Environment, Image, Project, Setup
+from .models import Environment, Image, Instance, Project, Setup
 from .token_cipher import TokenDecryptionError, decrypt_token, encrypt_token
 
 
@@ -20,6 +21,7 @@ RESOURCES = {
     'environments': (Environment, ('description',), 'project'),
     'images': (Image, ('description', 'definition', 'repository', 'branch', 'isPrivate'), 'environment'),
     'setups': (Setup, ('cpu', 'memory', 'port', 'volume'), 'image'),
+    'instances': (Instance, ('number', 'container_id', 'port'), 'setup'),
 }
 
 
@@ -62,36 +64,55 @@ def memory_capacity(request):
     return JsonResponse({'max_memory_bytes': maximum, 'source': source})
 
 
-def github_branches(request):
-    if request.method not in ('GET', 'POST'):
-        return HttpResponseNotAllowed(['GET', 'POST'])
+def github_repository_credentials(request):
     if request.method == 'GET':
-        repository = request.GET.get('repository', '')
-        token = None
+        return request.GET.get('repository', ''), None, None
     else:
         payload, error = parse_payload(request, ('repository', 'token', 'image_id'))
         if error:
-            return error
+            return None, None, error
         repository = payload.get('repository', '')
         token = payload.get('token') or None
         image_id = payload.get('image_id')
         if token is not None and (not isinstance(token, str) or image_id is not None):
-            return JsonResponse({'error': 'Informe o token ou o ID da imagem.'}, status=400)
+            return None, None, JsonResponse({'error': 'Informe o token ou o ID da imagem.'}, status=400)
         if image_id is not None:
             if not isinstance(image_id, int) or isinstance(image_id, bool):
-                return JsonResponse({'error': 'ID da imagem inválido.'}, status=400)
+                return None, None, JsonResponse({'error': 'ID da imagem inválido.'}, status=400)
             image = Image.objects.filter(pk=image_id, repository=repository, isPrivate=1).first()
             if image is None or not image.token:
-                return JsonResponse({'error': 'Imagem privada ou token não encontrado.'}, status=404)
+                return None, None, JsonResponse({'error': 'Imagem privada ou token não encontrado.'}, status=404)
             try:
                 token = decrypt_token(image.token)
             except TokenDecryptionError as error:
-                return JsonResponse({'code': 'token_unavailable', 'error': str(error)}, status=503)
+                return None, None, JsonResponse({'code': 'token_unavailable', 'error': str(error)}, status=503)
+    return repository, token, None
+
+
+def github_branches(request):
+    if request.method not in ('GET', 'POST'):
+        return HttpResponseNotAllowed(['GET', 'POST'])
+    repository, token, error = github_repository_credentials(request)
+    if error:
+        return error
     try:
         branches = list_github_branches(repository, token)
     except GithubBranchError as error:
         return JsonResponse({'code': error.code, 'error': str(error)}, status=error.status)
     return JsonResponse({'branches': branches})
+
+
+def github_description(request):
+    if request.method not in ('GET', 'POST'):
+        return HttpResponseNotAllowed(['GET', 'POST'])
+    repository, token, error = github_repository_credentials(request)
+    if error:
+        return error
+    try:
+        description = get_github_description(repository, token)
+    except GithubBranchError as error:
+        return JsonResponse({'code': error.code, 'error': str(error)}, status=error.status)
+    return JsonResponse({'description': description})
 
 
 def validate_image_repository(form, existing=None):
@@ -135,6 +156,10 @@ def serialize(record, resource):
         data[f'{parent_field}_id'] = getattr(record, f'{parent_field}_id')
     if resource == 'images':
         data['hasToken'] = bool(record.token)
+    if resource == 'setups':
+        data['hasInstances'] = Instance.objects.filter(setup_id=record.pk).exists()
+    if resource == 'instances':
+        data['container_name'] = record.code
     return data
 
 
@@ -222,6 +247,12 @@ def detail(request, resource, pk):
     if request.method != 'PUT':
         return HttpResponseNotAllowed(['GET', 'PUT', 'DELETE'])
 
+    if resource == 'setups' and Instance.objects.filter(setup_id=pk).exists():
+        return JsonResponse({
+            'code': 'setup_has_instances',
+            'error': 'Exclua todas as instâncias deste setup antes de editá-lo.',
+        }, status=409)
+
     editable = ('code', *fields, *(['token'] if resource == 'images' else []))
     payload, error = parse_payload(request, editable)
     if error:
@@ -244,7 +275,19 @@ def detail(request, resource, pk):
         record.token = (encrypt_token(form.cleaned_data['token']) if form.cleaned_data['token']
                         else existing['token'] if record.isPrivate else '')
     record.last_modified_by = request.user.get_username()
-    record.save()
+    if resource == 'setups':
+        # Instance creation updates this same row before reserving a replica.
+        # Taking a write lock here keeps the final check and save atomic with it.
+        with transaction.atomic():
+            Setup.objects.filter(pk=pk).update(last_instance_number=F('last_instance_number'))
+            if Instance.objects.filter(setup_id=pk).exists():
+                return JsonResponse({
+                    'code': 'setup_has_instances',
+                    'error': 'Exclua todas as instâncias deste setup antes de editá-lo.',
+                }, status=409)
+            record.save(update_fields=(*editable, 'last_modified_by', 'last_modified_date'))
+    else:
+        record.save()
     return JsonResponse(serialize(record, resource))
 
 
@@ -274,8 +317,66 @@ def setup_container(request, pk):
     setup = Setup.objects.select_related('image').filter(pk=pk).first()
     if setup is None:
         return JsonResponse({'error': 'Setup not found.'}, status=404)
+    # The UPDATE acquires SQLite's write lock before choosing a free replica.
+    # Keep the transaction short: Docker builds must never hold a database lock.
     try:
-        result = create_container(setup)
+        with transaction.atomic():
+            Setup.objects.filter(pk=pk).update(last_instance_number=F('last_instance_number'))
+            setup.refresh_from_db()
+            number = 1
+            occupied = Instance.objects.filter(setup_id=pk).order_by('number').values_list('number', flat=True)
+            for existing_number in occupied:
+                if existing_number > number:
+                    break
+                if existing_number == number:
+                    number += 1
+            instance = Instance.objects.create(
+                setup=setup, number=number,
+                code=f'{setup.code}-replica-{number}',
+                created_by=request.user.get_username(),
+                last_modified_by=request.user.get_username(),
+            )
+    except IntegrityError:
+        return JsonResponse({
+            'code': 'instance_name_conflict',
+            'error': 'Já existe uma instância com esse nome. Use um código de setup diferente.',
+        }, status=409)
+    try:
+        result = create_container(setup, instance.code, instance.number)
+    except ContainerCreationError as error:
+        instance.delete()
+        return JsonResponse({'code': error.code, 'error': str(error)}, status=error.status)
+    instance.container_id = result['container_id']
+    instance.port = result.get('port', '')
+    instance.save(update_fields=('container_id', 'port', 'last_modified_date'))
+    return JsonResponse(serialize(instance, 'instances'), status=201)
+
+
+@ensure_csrf_cookie
+def setup_instances(request, pk):
+    if request.method == 'POST':
+        return setup_container(request, pk)
+    if request.method != 'GET':
+        return HttpResponseNotAllowed(['GET', 'POST'])
+    if not Setup.objects.filter(pk=pk).exists():
+        return JsonResponse({'error': 'Setup not found.'}, status=404)
+    instances = Instance.objects.filter(setup_id=pk).exclude(container_id='').order_by('number')
+    return JsonResponse([serialize(instance, 'instances') for instance in instances], safe=False)
+
+
+def instance_detail(request, pk):
+    if request.method not in ('GET', 'DELETE'):
+        return HttpResponseNotAllowed(['GET', 'DELETE'])
+    instance = Instance.objects.filter(pk=pk).first()
+    if instance is None:
+        return JsonResponse({'error': 'Instance not found.'}, status=404)
+    if not instance.container_id:
+        return JsonResponse({'code': 'instance_busy', 'error': 'A instância ainda está sendo criada.'}, status=409)
+    if request.method == 'GET':
+        return JsonResponse(serialize(instance, 'instances'))
+    try:
+        remove_container(instance.container_id)
     except ContainerCreationError as error:
         return JsonResponse({'code': error.code, 'error': str(error)}, status=error.status)
-    return JsonResponse(result, status=201)
+    instance.delete()
+    return JsonResponse({'deleted': True})
