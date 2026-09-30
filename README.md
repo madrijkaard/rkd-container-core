@@ -1,10 +1,14 @@
-# Container Core
+<p align="center"><img src="docs/assets/dockestra-logo.png" alt="Dockestra" width="560"></p>
 
-Python and Django backend for the Container platform. The Django project is `container_core`, and its application is `core`.
+# rkd-dockestra-core
+
+Python and Django backend for the Dockestra platform. The Django project is `rkd_dockestra_core`, and its application is `core`.
 
 ## Database
 
-SQLite stores data in `container_core.sqlite3` at the repository root by default. Set `DJANGO_DB_PATH` to use another location; the container uses `/data/container_core.sqlite3` so a Docker volume can persist it. The `core` migrations create the `project`, `environment`, `image`, and `setup` tables. Migration `0003` renames the previous table to `setup` without discarding its records. Their relationships use `project_id`, `environment_id`, and `image_id`. Each table has an automatically generated `id` primary key.
+Na primeira inicialização após a renomeação, o container copia o SQLite persistido com o nome anterior para o novo arquivo antes de aplicar as migrações. O arquivo antigo permanece como cópia de segurança. Na execução direta de `manage.py`, o Django usa o banco antigo caso ele exista e o novo ainda não exista. Tokens GitHub já criptografados continuam legíveis com a mesma `DJANGO_SECRET_KEY`.
+
+SQLite stores data in `rkd_dockestra_core.sqlite3` at the repository root by default. Set `DJANGO_DB_PATH` to use another location; the container uses `/data/rkd_dockestra_core.sqlite3` so a Docker volume can persist it. The `core` migrations create the `project`, `environment`, `image`, `setup`, and `instance` tables. The hierarchy is `Project → Environment → Image → Setup → Instance`; each instance has a protected `setup_id` foreign key. Migration `0003` renames the previous table to `setup` without discarding its records. Their relationships use `project_id`, `environment_id`, and `image_id`. Each table has an automatically generated `id` primary key.
 
 ## Requirements
 
@@ -34,6 +38,10 @@ The initial JSON response is available at `http://127.0.0.1:8000/`.
 
 ## Testar localmente com Docker
 
+Para reconstruir e recriar somente o backend local após alterações no código, execute `bash refresh-local.sh` nesta raiz (também funciona a partir de outro diretório). O script preserva `.env` e `volumes/sqlite/`, aplica as migrations na inicialização e aguarda o backend ficar saudável. Para atualizar backend, frontend e Nginx em um único comando, execute `bash refresh-local.sh` na raiz de `rkd-dockestra-web`.
+
+O container do backend se chama `rkd-dockestra-core-local-1` neste modo e `rkd-dockestra-core-1` no Compose da VPS. Os nomes são fixados com `container_name`: o sufixo `1` faz parte do nome e não aumenta automaticamente. Essa configuração permite uma instância do serviço por ambiente. Os comandos Compose continuam usando o serviço `backend`, e a comunicação interna usa o alias `rkd-backend`.
+
 Use Docker Desktop com **containers Linux** e Docker Compose. Você pode gerar a chave pelo **Git Bash no Windows**, com OpenSSL disponível (`openssl version`). Também pode executar o script em Ubuntu/WSL com a [integração do Docker Desktop](https://docs.docker.com/desktop/features/wsl/) habilitada. Para melhor compatibilidade de permissões e volumes, prefira os clones no sistema de arquivos Linux do WSL. Os comandos seguintes são executados na raiz do backend; depois da geração, os comandos `docker compose` também podem ser executados no PowerShell.
 
 A ordem é: **gerar/preservar a chave no `.env` → criar o backend → criar o usuário → iniciar frontend e Nginx**. Nenhum container do backend precisa existir para gerar a chave:
@@ -50,7 +58,7 @@ O primeiro comando só prepara o `.env` e não chama Docker. O segundo constrói
 Em seguida, na raiz do frontend:
 
 ```bash
-cd ../rkd-container-web
+cd ../rkd-dockestra-web
 docker build -t rkd-web-local-frontend:latest .
 docker build -t rkd-web-local-nginx:latest -f Dockerfile.proxy.local .
 docker compose -f docker-compose.local.yml up -d --no-build
@@ -58,7 +66,9 @@ docker compose -f docker-compose.local.yml up -d --no-build
 
 Abra **http://localhost:8080/**. O Compose local usa a rede `rkd-local-network`, criada pelo backend, e mantém a porta 8000 interna. Ele desativa Turnstile apenas nesse modo de desenvolvimento e permite os cookies de login em HTTP; não exige um widget, certificado HTTPS ou `.env` do frontend. A chave Django continua obrigatória. Os containers gerenciados pelo sistema serão criados no Docker local.
 
-O SQLite local fica em `volumes/sqlite/container_core.local.sqlite3` e é preservado ao recriar o backend. Ele é separado do arquivo usado pelo Compose da VPS e do banco de desenvolvimento na raiz; por isso os usuários e registros desses outros bancos não aparecem automaticamente. O script preserva a chave existente e recusa gerar outra se encontrar um SQLite persistido sem a chave original.
+O SQLite local fica em `volumes/sqlite/rkd_dockestra_core.local.sqlite3` e é preservado ao recriar o backend. Ele é separado do arquivo usado pelo Compose da VPS e do banco de desenvolvimento na raiz; por isso os usuários e registros desses outros bancos não aparecem automaticamente. O script preserva a chave existente e recusa gerar outra se encontrar um SQLite persistido sem a chave original.
+
+A pasta `volumes/` contém apenas dados gerados e é ignorada pelo Git e pelo build Docker. Não é necessário restaurá-la pelo Git antes de iniciar: o Compose cria o diretório montado e o backend cria as tabelas automaticamente. Apagar essa pasta remove o banco, incluindo usuários e cadastros; na próxima inicialização será criado um banco vazio.
 
 Para consultar o backend local:
 
@@ -77,7 +87,7 @@ No Windows, abra `certmgr.msc`, acesse **Autoridades de Certificação Raiz Conf
 
 O Dockerfile instala os `.crt` antes dos downloads HTTPS e o pip usa o bundle completo do sistema. Os certificados locais são ignorados pelo Git; a pasta fica vazia em um clone novo, até você adicionar a CA necessária naquele ambiente. Para reconstruir localmente, execute `docker build -t rkd-core-local-backend:latest .` e depois `docker compose -f docker-compose.local.yml up -d --no-build --wait`. O backend preserva o `.env` e o SQLite durante essa operação.
 
-Se a mesma inspeção HTTPS atingir o frontend, copie a mesma CA para `rkd-container-web/docker/certificates/`, conforme o README daquele projeto. Na VPS, só adicione uma CA extra se a rede da VPS também exigir essa confiança.
+Se a mesma inspeção HTTPS atingir o frontend, copie a mesma CA para `rkd-dockestra-web/docker/certificates/`, conforme o README daquele projeto. Na VPS, só adicione uma CA extra se a rede da VPS também exigir essa confiança.
 
 ## Deploy on the Ubuntu VPS with Docker Compose
 
@@ -104,9 +114,9 @@ sudo docker buildx version
 Os comandos abaixo são executados na VPS, via SSH. Clone os dois projetos no mesmo diretório pai; inicie o backend antes do frontend, pois ele cria `rkd-network`:
 
 ```bash
-git clone https://github.com/madrijkaard/rkd-container-core.git
-git clone https://github.com/madrijkaard/rkd-container-web.git
-cd rkd-container-core
+git clone https://github.com/madrijkaard/rkd-dockestra-core.git
+git clone https://github.com/madrijkaard/rkd-dockestra-web.git
+cd rkd-dockestra-core
 bash configure-secret-key.sh --generate-only
 nano .env
 sudo bash configure-secret-key.sh
@@ -121,7 +131,7 @@ TURNSTILE_SITE_KEY=<site_key_do_widget>
 TURNSTILE_SECRET_KEY=<secret_key_do_widget>
 ```
 
-Mantenha `DJANGO_SECRET_KEY` estável: ela protege sessões e criptografa os tokens GitHub salvos. O Compose já define `DJANGO_DEBUG=False`, `DJANGO_ALLOWED_HOSTS=sinan-pro.com`, `TURNSTILE_ALLOWED_HOSTNAMES=sinan-pro.com` e `DJANGO_DB_PATH=/data/container_core.sqlite3`. Não é necessário criar essas variáveis no ambiente global do Ubuntu: o `.env` é passado ao container. Não coloque chaves no frontend, no Dockerfile, no Git ou em uma imagem Docker.
+Mantenha `DJANGO_SECRET_KEY` estável: ela protege sessões e criptografa os tokens GitHub salvos. O Compose já define `DJANGO_DEBUG=False`, `DJANGO_ALLOWED_HOSTS=sinan-pro.com`, `TURNSTILE_ALLOWED_HOSTNAMES=sinan-pro.com` e `DJANGO_DB_PATH=/data/rkd_dockestra_core.sqlite3`. Não é necessário criar essas variáveis no ambiente global do Ubuntu: o `.env` é passado ao container. Não coloque chaves no frontend, no Dockerfile, no Git ou em uma imagem Docker.
 
 Se a variável estiver ausente, vazia ou contiver apenas espaços, o backend encerra a inicialização e escreve no terminal/log uma mensagem indicando que falta configurar `DJANGO_SECRET_KEY`. Não existe chave padrão de desenvolvimento. O build usa uma chave aleatória temporária apenas para `collectstatic`; ela não é configurada como variável de ambiente da imagem nem substitui a chave obrigatória em execução.
 
@@ -141,28 +151,30 @@ Uma variável exportada em uma sessão `docker exec` só afeta aquela sessão. P
 
 ### Persistência e primeiro usuário
 
-O SQLite fica em **`rkd-container-core/volumes/sqlite/container_core.sqlite3` na VPS**, montado como `/data/container_core.sqlite3` no container. O backend cria a pasta e executa as migrations ao iniciar. O banco local de desenvolvimento e seus usuários não são enviados pelo Git. Para criar o primeiro operador no banco novo:
+O SQLite fica em **`rkd-dockestra-core/volumes/sqlite/rkd_dockestra_core.sqlite3` na VPS**, montado como `/data/rkd_dockestra_core.sqlite3` no container. O backend cria a pasta e executa as migrations ao iniciar. O banco local de desenvolvimento e seus usuários não são enviados pelo Git. Para criar o primeiro operador no banco novo:
 
 ```bash
 sudo docker compose exec backend python manage.py createsuperuser
 sudo docker compose logs --tail=100 backend
 ```
 
-Depois, entre em `../rkd-container-web` e siga a seção de implantação do README do frontend para configurar `ACME_EMAIL`, iniciar Nginx e Certbot e acessar `https://sinan-pro.com/`.
+Depois, entre em `../rkd-dockestra-web` e siga a seção de implantação do README do frontend para configurar `ACME_EMAIL`, iniciar Nginx e Certbot e acessar `https://sinan-pro.com/`.
 
 ### Manutenção e cuidados
 
-Faça backup de `volumes/sqlite/container_core.sqlite3` **e** da `DJANGO_SECRET_KEY`, armazenando a chave separadamente. Se trocar a chave sem regravar os tokens, os tokens privados já salvos não poderão ser descriptografados. Ao atualizar este projeto, execute `git pull` e `sudo docker compose up -d --build` neste diretório. Consulte `sudo docker compose ps` e `sudo docker compose logs --tail=100 backend` se o backend não ficar saudável.
+Faça backup de `volumes/sqlite/rkd_dockestra_core.sqlite3` **e** da `DJANGO_SECRET_KEY`, armazenando a chave separadamente. Se trocar a chave sem regravar os tokens, os tokens privados já salvos não poderão ser descriptografados. Ao atualizar este projeto, execute `git pull` e `sudo docker compose up -d --build` neste diretório. Consulte `sudo docker compose ps` e `sudo docker compose logs --tail=100 backend` se o backend não ficar saudável.
 
 O socket Docker dá ao backend controle efetivo sobre o host. Conceda acesso de operador (`staff`) somente a pessoas confiáveis e não exponha a porta 8000 publicamente.
 
 ## Backend image definition
 
-The repository's `Dockerfile` deploys Container Core itself. For a container managed by the application, save Dockerfile text in an `image` record's `definition` field, then create a setup linked to that image. Without a GitHub repository, the API builds with the backend repository root as its context. With a repository, it checks out the selected branch into a temporary directory and uses that source tree as the context. The Dockerfile can use `COPY . /app` to include the selected branch. The backend `.dockerignore` applies only when the backend repository is the context; a linked repository can supply its own `.dockerignore`.
+The repository's `Dockerfile` deploys Dockestra Core itself. For a container managed by the application, save Dockerfile text in an `image` record's `definition` field, then create a setup linked to that image. Without a GitHub repository, the API builds with the backend repository root as its context. With a repository, it checks out the selected branch into a temporary directory and uses that source tree as the context. The Dockerfile can use `COPY . /app` to include the selected branch. The backend `.dockerignore` applies only when the backend repository is the context; a linked repository can supply its own `.dockerignore`.
 
-For a backend image, use Python 3.12, install `requirements.txt`, include the application source, run migrations at startup, and serve `container_core.wsgi:application` with Gunicorn. Set `DJANGO_DB_PATH` to a path such as `/data/container_core.sqlite3`. The setup determines whether to mount a named volume at `/data` and publish a port. The image needs the Docker CLI only if it will itself call the container creation endpoint; the CLI also needs a reachable daemon and appropriate credentials at runtime.
+The image form reads the repository's GitHub About description through `GET /api/github/description/` for public repositories or `POST /api/github/description/` with a token or saved image ID for private repositories. The response contains only `description`; tokens remain on the backend. An empty About field returns an empty string so the operator can enter a description manually.
 
-The container API applies the setup's CPU, memory, optional port mapping, and optional named volume mount when starting a container. It does not pass environment variables or Docker daemon credentials to the container. API access requires a Django staff account. Only trusted operators should receive staff access because they can define Dockerfiles and start containers.
+For a backend image, use Python 3.12, install `requirements.txt`, include the application source, run migrations at startup, and serve `rkd_dockestra_core.wsgi:application` with Gunicorn. Set `DJANGO_DB_PATH` to a path such as `/data/rkd_dockestra_core.sqlite3`. The setup determines whether to mount a named volume at `/data` and publish a port. The image needs the Docker CLI only if it will itself call the container creation endpoint; the CLI also needs a reachable daemon and appropriate credentials at runtime.
+
+The container API applies the setup's CPU, memory, optional port mapping, and optional named volume mount when starting a container. Replica N uses `host_port + N - 1`, retaining the configured bind IP and container port. For example, `8000:8000` gives replicas 1, 2, and 3 host ports 8000, 8001, and 8002. The mapping is stored in `instance.port`. A deleted replica number and its port offset can be reused by the next instance. An occupied port causes a creation error; ports exceeding 65535 are rejected before building. Replicas share the setup's named volume. It does not pass environment variables or Docker daemon credentials to the container. API access requires a Django staff account. Only trusted operators should receive staff access because they can define Dockerfiles and start containers.
 
 ## CRUD API
 
@@ -172,6 +184,7 @@ The container API applies the setup's CPU, memory, optional port mapping, and op
 | Environments in a project | `GET/POST /api/projects/<id>/environments/` | `GET/PUT/DELETE /api/environments/<id>/` |
 | Images in an environment | `GET/POST /api/environments/<id>/images/` | `GET/PUT/DELETE /api/images/<id>/` |
 | Setups using an image | `GET/POST /api/images/<id>/setups/` | `GET/PUT/DELETE /api/setups/<id>/` |
+| Instances of a setup | `GET/POST /api/setups/<id>/instances/` | `GET/DELETE /api/instances/<id>/` |
 
 `GET /api/projects/<id>/setups/` lists every setup in a project and includes its setup, image, and environment codes.
 
@@ -185,7 +198,11 @@ Images store optional `repository` and `branch` strings (up to 256 characters ea
 
 ## Docker containers
 
-`POST /api/setups/<id>/containers/` builds an image from the linked image's `definition` (Dockerfile text) and starts a detached container. The endpoint returns its container ID and name. The Docker CLI must be on the Django process's `PATH`, and the Docker daemon must be running. If Docker is unavailable, the API returns HTTP 503 with `code: "docker_unavailable"`; the web app shows a notification.
+`GET /api/setups/<id>/instances/` lists the setup's successfully created instances. `POST` to the same URL builds the linked image's `definition` (Dockerfile text), starts a detached container, and persists an `instance` row. The response includes `id`, `setup_id`, `number`, `code`, `container_id`, `container_name`, `port`, and audit fields. `POST /api/setups/<id>/containers/` remains a compatible alias and also persists the instance.
+
+Instance codes and Docker container names are exactly `<setup-code>-replica-<number>`, for example `SERVER-replica-1`. The API reserves the lowest available positive number atomically before the Docker build without holding a database transaction during the build. Pending instances also reserve their number. After deletion or a failed creation, that number can be reused. Existing containers keep their assigned names and ports; they are not renumbered automatically. Codes must form valid Docker names; duplicate names across setups return HTTP 409. Setup responses include `hasInstances`; while it is true, `PUT /api/setups/<id>/` returns HTTP 409 (`setup_has_instances`) without changing the setup. The Django Admin also refuses setup changes in this state. This includes instances still being created. Delete all registered instances before editing a setup.
+
+`DELETE /api/instances/<id>/` forcibly stops and removes the recorded container by its Docker ID, then removes the database row. If Docker fails, the row is kept for retry. If the container was already removed externally, the row can still be deleted. Named volumes are preserved. A setup with instances cannot be deleted. Existing containers created before migration `0008` are not automatically registered because their identities were never stored. The Docker CLI must be on the Django process's `PATH`, and the Docker daemon must be running. If Docker is unavailable, the API returns HTTP 503 with `code: "docker_unavailable"`; the web app shows a notification.
 
 The definition is passed to `docker build --file -` through standard input. If a repository is set, Git checks out the selected branch first; the token is supplied to Git through its process environment and is not sent to Docker, placed in the clone URL, or saved in `.git/config`. The temporary checkout is removed after the build. The setup's `cpu` accepts a positive number such as `2` or `0.5`, up to the current CPU limit. Its `memory` accepts a positive quantity of at least 6 MB with a unit, such as `512 MB` or `4 GB`, up to the current machine capacity. The API checks both limits when a setup is saved and again against the Docker daemon when a container starts. Optional `port` uses `host_port:container_port`, such as `8000:8000`, and binds to `127.0.0.1` by default. To choose another IPv4 bind address, use `IP:host_port:container_port`, such as `0.0.0.0:8000:8000`. Optional `volume` uses a named volume and absolute container path, such as `backend_data:/data`; host bind paths are not accepted. These values are applied with Docker's `--cpus`, `--memory`, `--publish`, and `--mount` options. Each request creates a separately named image and container. Use a stable volume name for a replacement container that should access the same SQLite database; do not run two writers against the same database at once.
 
