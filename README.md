@@ -28,45 +28,94 @@ From Git Bash on Windows:
 python -m venv .venv
 ./.venv/Scripts/python.exe -m pip install -r requirements.txt
 ./.venv/Scripts/python.exe manage.py migrate
-./.venv/Scripts/python.exe manage.py createsuperuser
+./.venv/Scripts/python.exe manage.py createsuperuser --username RKD
 ./.venv/Scripts/python.exe manage.py runserver
 ```
 
-From PowerShell, use `.\.venv\Scripts\python.exe` in place of `./.venv/Scripts/python.exe`. If `.venv` already exists, skip the virtual environment creation step.
+From PowerShell, use `.\.venv\Scripts\python.exe` in place of `./.venv/Scripts/python.exe`. If `.venv` already exists, skip the virtual environment creation step. Gmail host, port and TLS have defaults; enter the email address and app password in the terminal when creating the operator. Direct Django execution does not load `.env` automatically.
 
 The initial JSON response is available at `http://127.0.0.1:8000/`.
 
 ## Testar localmente com Docker
 
-Para reconstruir e recriar somente o backend local após alterações no código, execute `bash refresh-local.sh` nesta raiz (também funciona a partir de outro diretório). O script preserva `.env` e `volumes/sqlite/`, aplica as migrations na inicialização e aguarda o backend ficar saudável. Para atualizar backend, frontend e Nginx em um único comando, execute `bash refresh-local.sh` na raiz de `rkd-dockestra-web`.
+Execute `bash scripts/refresh-local.sh` na raiz deste backend (ou `./refresh-local.sh` dentro de `scripts/`). O script faz **somente o deploy do backend**. Ele não gera nem troca `DJANGO_SECRET_KEY`: se faltar a chave no `.env`, interrompe antes de remover qualquer container e orienta executar `scripts/configure-secret-key.sh`.
+
+Depois das verificações iniciais, remove o container antigo sem apagar volumes, constrói a imagem atual, executa os testes em um container descartável com banco em memória (sem o `.env`, banco real ou socket Docker do host), verifica se os models possuem migrations versionadas, aplica as migrations pendentes no SQLite persistido e inicia um novo backend. Não executa `makemigrations` para gerar arquivos: alterações de models devem vir acompanhadas das migrations no código. O entrypoint aceita comandos avulsos para aplicar migrations e também mantém a aplicação idempotente de migrations na inicialização normal.
+
+Se o build, os testes ou as migrations falharem, o script encerra sem iniciar o novo backend. Como a remoção vem primeiro, o serviço fica indisponível até corrigir o erro e repetir o deploy. A chave e os arquivos do banco são preservados; migrations podem modificar a estrutura e os dados conforme seu próprio código. Faça backup antes de migrations que alterem dados. O frontend e o Nginx têm seu próprio deploy, executado separadamente em `rkd-dockestra-web/scripts/refresh-local.sh`.
 
 O container do backend se chama `rkd-dockestra-core-local-1` neste modo e `rkd-dockestra-core-1` no Compose da VPS. Os nomes são fixados com `container_name`: o sufixo `1` faz parte do nome e não aumenta automaticamente. Essa configuração permite uma instância do serviço por ambiente. Os comandos Compose continuam usando o serviço `backend`, e a comunicação interna usa o alias `rkd-backend`.
 
 Use Docker Desktop com **containers Linux** e Docker Compose. Você pode gerar a chave pelo **Git Bash no Windows**, com OpenSSL disponível (`openssl version`). Também pode executar o script em Ubuntu/WSL com a [integração do Docker Desktop](https://docs.docker.com/desktop/features/wsl/) habilitada. Para melhor compatibilidade de permissões e volumes, prefira os clones no sistema de arquivos Linux do WSL. Os comandos seguintes são executados na raiz do backend; depois da geração, os comandos `docker compose` também podem ser executados no PowerShell.
 
-A ordem é: **gerar/preservar a chave no `.env` → criar o backend → criar o usuário → iniciar frontend e Nginx**. Nenhum container do backend precisa existir para gerar a chave:
+A ordem é: **gerar/preservar a chave no `.env` → criar o backend → informar o e-mail e a senha de app no terminal → confirmar o e-mail e criar RKD → iniciar frontend e Nginx**. Nenhum container do backend precisa existir para gerar a chave:
 
 ```bash
-bash configure-secret-key.sh --generate-only
-docker build -t rkd-core-local-backend:latest .
-docker compose -f docker-compose.local.yml up -d --no-build --wait
-docker compose -f docker-compose.local.yml exec backend python manage.py createsuperuser --username RKD
+bash scripts/configure-secret-key.sh
+# O e-mail e a senha de app serão solicitados por create-superuser.sh.
+bash scripts/refresh-local.sh
+bash scripts/create-superuser.sh
 ```
 
-O primeiro comando só prepara o `.env` e não chama Docker. O segundo constrói a imagem, e o terceiro cria o container já com `DJANGO_SECRET_KEY`, usando `env_file: .env`. No Windows, separar build e subida evita um possível erro de renomeação de arquivo temporário de metadados do Compose/Bake (`Identificador inválido`). Para gerar/preservar a chave e iniciar o backend em uma única execução, use `bash configure-secret-key.sh --local` e depois crie o usuário; no Git Bash, o script também separa build e subida. Se o usuário já existir, pule o comando `createsuperuser`.
+O primeiro comando só prepara o `.env` e não chama Docker. `refresh-local.sh` realiza o deploy e aplica migrations sem alterar a chave. No Windows, o script separa `docker build` de `docker compose up --no-build` para evitar erros de metadados do Compose/Bake. O cadastro é uma etapa separada; se RKD já existir, `create-superuser.sh` inicia a recuperação pelo e-mail cadastrado.
 
 Em seguida, na raiz do frontend:
 
 ```bash
 cd ../rkd-dockestra-web
-docker build -t rkd-web-local-frontend:latest .
-docker build -t rkd-web-local-nginx:latest -f Dockerfile.proxy.local .
-docker compose -f docker-compose.local.yml up -d --no-build
+bash scripts/refresh-local.sh
 ```
 
 Abra **http://localhost:8080/**. O Compose local usa a rede `rkd-local-network`, criada pelo backend, e mantém a porta 8000 interna. Ele desativa Turnstile apenas nesse modo de desenvolvimento e permite os cookies de login em HTTP; não exige um widget, certificado HTTPS ou `.env` do frontend. A chave Django continua obrigatória. Os containers gerenciados pelo sistema serão criados no Docker local.
 
-O SQLite local fica em `volumes/sqlite/rkd_dockestra_core.local.sqlite3` e é preservado ao recriar o backend. Ele é separado do arquivo usado pelo Compose da VPS e do banco de desenvolvimento na raiz; por isso os usuários e registros desses outros bancos não aparecem automaticamente. O script preserva a chave existente e recusa gerar outra se encontrar um SQLite persistido sem a chave original.
+### Primeiro superusuário RKD com confirmação por e-mail
+
+O script `scripts/create-superuser.sh` existe apenas neste backend, fixa o usuário **RKD** e executa `docker exec -it rkd-dockestra-core-local-1 python manage.py createsuperuser --username RKD`. Ele funciona a partir de qualquer diretório quando chamado pelo caminho correto. No Git Bash/mintty, utiliza `winpty` quando disponível.
+
+O comando Django `createsuperuser` foi customizado: enquanto o banco estiver vazio, apenas **RKD** pode ser o primeiro usuário. A confirmação de e-mail também é obrigatória para superusuários posteriores criados pelo comando, inclusive ao usar `--email`. O modo `--noinput` é recusado. Se o superusuário RKD já existir, o script inicia automaticamente a recuperação de acesso: envia o código somente ao e-mail já cadastrado, aguarda sua confirmação e solicita uma nova senha. O e-mail, as permissões e os demais dados são preservados. A senha anterior deixa de funcionar e as sessões autenticadas anteriormente precisam fazer login novamente. Outros usuários existentes continuam sendo recusados por este comando.
+
+Para enviar pelo Gmail, ative a verificação em duas etapas da conta remetente e crie uma [senha de app do Google](https://support.google.com/accounts/answer/185833?hl=pt-BR). A disponibilidade depende das políticas da conta. A senha de app será solicitada duas vezes no terminal, com digitação oculta e sem espaços. As duas entradas devem ser exatamente iguais, inclusive maiúsculas e minúsculas. Se diferirem ou contiverem espaços, ambas serão solicitadas novamente antes de enviar qualquer e-mail. Nunca informe a senha normal da conta Google. Acrescente apenas as configurações abaixo ao `.env` **do backend**, preservando a chave Django e os demais valores:
+
+```dotenv
+EMAIL_HOST=smtp.gmail.com
+EMAIL_PORT=587
+EMAIL_USE_TLS=True
+EMAIL_USE_SSL=False
+```
+
+O e-mail informado para RKD no terminal autentica o envio SMTP e também recebe o código de confirmação. A senha de app precisa pertencer a essa mesma conta Gmail. Os padrões de host, porta e TLS já correspondem ao [SMTP do Gmail](https://support.google.com/mail/answer/7104828?hl=pt-BR). Não configure endereços ou senhas no `.env`: `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD` e `DEFAULT_FROM_EMAIL` antigos não são mais lidos.
+
+O e-mail e a senha de app ficam criptografados nas colunas `encrypted_email` e `encrypted_password` da tabela `smtp_credential`. O endereço de cada operador fica em `operator_email.encrypted_email`, relacionado à conta; `auth_user.email` fica vazio para não manter uma cópia em texto aberto. A criptografia autenticada Fernet usa chaves derivadas de `DJANGO_SECRET_KEY`, separadas por finalidade. Essas tabelas não são expostas na API nem na administração. As gravações ocorrem na mesma transação da conta, somente após confirmar o código e definir a senha de acesso. Falhas ou cancelamento preservam os registros anteriores.
+
+A migration `0010_encrypted_email` converte os endereços existentes para esse formato e remove a antiga coluna SMTP `username`, preservando usuários, permissões e senhas. Na recuperação, o endereço original de RKD é decifrado do banco: não é solicitado um novo endereço e não é permitido substituí-lo. Se o remetente SMTP antigo era diferente do e-mail cadastrado de RKD, informe a senha de app da conta de RKD na próxima execução. Outros superusuários recebem a confirmação em seus próprios endereços, usando RKD como remetente.
+
+A credencial é reutilizada nas próximas execuções. Se o Gmail recusar a senha salva, o terminal solicita uma nova senha de app. Se o endereço cadastrado não puder ser decifrado, restaure a `DJANGO_SECRET_KEY` original: a recuperação não aceita outro endereço para contornar essa falha. Bancos local e de produção possuem configurações independentes. O reset com `configure-secret-key.sh --force` também remove os endereços e a credencial, que precisarão ser informados novamente.
+
+Depois de configurar o `.env`, execute na raiz do backend:
+
+```bash
+bash scripts/refresh-local.sh
+bash scripts/create-superuser.sh
+```
+
+A reconstrução é necessária para incluir o comando atualizado na imagem, aplicar as migrations de credenciais, incluindo `0010_encrypted_email` e carregar as configurações SMTP no container. O script recusa containers antigos que ainda não suportem a credencial criptografada no banco.
+
+Se aparecer **autenticação SMTP recusada (código 535)**, o servidor SMTP foi alcançado, mas recusou as credenciais. Informe no terminal uma senha de app válida gerada na conta Google correspondente ao e-mail cadastrado de RKD. A credencial salva recusada pode ser substituída na própria execução; se a nova também for recusada, execute `scripts/create-superuser.sh` novamente. A troca da senha de app não exige deploy. Se alterar host, porta ou TLS no `.env`, recrie o backend com `bash scripts/refresh-local.sh`. A falha de envio preserva a conta e a credencial já salvas.
+
+Fluxo do terminal para uma conta nova:
+
+1. Informe o e-mail de RKD. Ele será usado como remetente SMTP e destinatário da confirmação.
+2. Na primeira configuração, informe `EMAIL_HOST_PASSWORD`, a senha de app dessa conta Gmail, sem espaços. Pressione Enter e digite novamente para confirmar. Ambas as digitações ficam ocultas e precisam ser idênticas.
+3. Receba um código aleatório com **16 caracteres alfanuméricos**, exibido no e-mail em quatro grupos de quatro, como `a7B2-xQ9m-Z1y2-X3w4`. Os três hífens são apenas visuais.
+4. Digite apenas os **16 caracteres, sem hífens nem espaços**, respeitando maiúsculas e minúsculas: para o exemplo acima, `a7B2xQ9mZ1y2X3w4`. O terminal aguarda sua entrada; a validade de **5 minutos** é conferida quando você responde. Há no máximo **3 tentativas** por execução. Ao errar três vezes ou responder após a expiração, o comando encerra e exige executar `./create-superuser.sh` novamente para receber outro código.
+5. Após confirmar o e-mail, defina e repita a senha de acesso. A senha não aparece enquanto é digitada e deve passar pelos validadores do Django.
+6. A conta e a credencial SMTP criptografada são salvas somente depois dessas etapas. Entre na interface com `RKD` e a senha escolhida.
+
+Na recuperação, o terminal não solicita um novo e-mail: usa o endereço original de RKD. Mesmo `--email` não pode substituí-lo. A nova senha deve ser diferente da atual e passar pelos validadores do Django. Se RKD estiver inativo, não tiver acesso de operador/superusuário ou não possuir um e-mail válido, o comando encerra e solicita revisão administrativa; ele não promove nem reativa contas. Se a conta for alterada por outro processo durante a confirmação, a recuperação é recusada e deve ser reiniciada.
+
+Cada execução que inicia a verificação gera um novo código com o gerador criptográfico do Python. O código fica apenas na memória daquele processo e na mensagem enviada; não é exibido no terminal, persistido no banco ou aceito por outra execução. Erro de envio, código incorreto, expiração ou cancelamento não cria usuário nem altera a senha existente. Use `Ctrl+C` para cancelar e execute novamente para receber outro código. Testes automatizados usam a caixa de e-mail em memória do Django, sem enviar mensagens reais.
+
+O SQLite local fica em `volumes/sqlite/rkd_dockestra_core.local.sqlite3` e é preservado ao recriar o backend. Ele é separado do arquivo usado pelo Compose da VPS e do banco de desenvolvimento na raiz; por isso os usuários, credenciais SMTP e registros desses outros bancos não aparecem automaticamente. Preserve a chave original para continuar decifrando as credenciais salvas.
 
 A pasta `volumes/` contém apenas dados gerados e é ignorada pelo Git e pelo build Docker. Não é necessário restaurá-la pelo Git antes de iniciar: o Compose cria o diretório montado e o backend cria as tabelas automaticamente. Apagar essa pasta remove o banco, incluindo usuários e cadastros; na próxima inicialização será criado um banco vazio.
 
@@ -77,7 +126,7 @@ docker compose -f docker-compose.local.yml ps
 docker compose -f docker-compose.local.yml logs -f backend
 ```
 
-Use `-f docker-compose.local.yml` em todos os comandos locais. Executar o script sem `--local` ou o Compose sem `-f` seleciona a configuração da VPS.
+Use `-f docker-compose.local.yml` em todos os comandos locais do Compose. O Compose sem `-f` seleciona a configuração da VPS; `scripts/refresh-local.sh` sempre usa a configuração local e não recebe flags.
 
 ### Erro de certificado HTTPS durante o build
 
@@ -117,9 +166,9 @@ Os comandos abaixo são executados na VPS, via SSH. Clone os dois projetos no me
 git clone https://github.com/madrijkaard/rkd-dockestra-core.git
 git clone https://github.com/madrijkaard/rkd-dockestra-web.git
 cd rkd-dockestra-core
-bash configure-secret-key.sh --generate-only
+bash scripts/configure-secret-key.sh
 nano .env
-sudo bash configure-secret-key.sh
+sudo docker compose up -d --build
 sudo docker compose ps
 ```
 
@@ -131,30 +180,41 @@ TURNSTILE_SITE_KEY=<site_key_do_widget>
 TURNSTILE_SECRET_KEY=<secret_key_do_widget>
 ```
 
-Mantenha `DJANGO_SECRET_KEY` estável: ela protege sessões e criptografa os tokens GitHub salvos. O Compose já define `DJANGO_DEBUG=False`, `DJANGO_ALLOWED_HOSTS=sinan-pro.com`, `TURNSTILE_ALLOWED_HOSTNAMES=sinan-pro.com` e `DJANGO_DB_PATH=/data/rkd_dockestra_core.sqlite3`. Não é necessário criar essas variáveis no ambiente global do Ubuntu: o `.env` é passado ao container. Não coloque chaves no frontend, no Dockerfile, no Git ou em uma imagem Docker.
+Mantenha `DJANGO_SECRET_KEY` estável: ela protege sessões e criptografa os tokens GitHub, os endereços de e-mail e a senha de app SMTP salvos. O Compose já define `DJANGO_DEBUG=False`, `DJANGO_ALLOWED_HOSTS=sinan-pro.com`, `TURNSTILE_ALLOWED_HOSTNAMES=sinan-pro.com` e `DJANGO_DB_PATH=/data/rkd_dockestra_core.sqlite3`. Não é necessário criar essas variáveis no ambiente global do Ubuntu: o `.env` é passado ao container. Não coloque chaves no frontend, no Dockerfile, no Git ou em uma imagem Docker.
 
 Se a variável estiver ausente, vazia ou contiver apenas espaços, o backend encerra a inicialização e escreve no terminal/log uma mensagem indicando que falta configurar `DJANGO_SECRET_KEY`. Não existe chave padrão de desenvolvimento. O build usa uma chave aleatória temporária apenas para `collectstatic`; ela não é configurada como variável de ambiente da imagem nem substitui a chave obrigatória em execução.
 
 ### Script para configurar DJANGO_SECRET_KEY
 
-`configure-secret-key.sh`, na raiz deste projeto, gera 48 bytes aleatórios com OpenSSL e grava sua representação hexadecimal (96 caracteres) em `.env`, com permissão `600`. A chave não é exibida na saída. Ao executar sem opções, o script usa o `env_file` do Compose para criar/recriar o backend com a variável, aguarda o container ficar saudável e confirma a presença de `DJANGO_SECRET_KEY` sem revelar o valor. A recriação causa uma breve interrupção do backend e preserva o SQLite montado.
+`scripts/configure-secret-key.sh` cuida somente da chave e, com `--force`, do reset dos bancos. Sem opções, gera 48 bytes aleatórios com OpenSSL, salva os 96 caracteres hexadecimais em `DJANGO_SECRET_KEY` no `.env` da raiz e preserva as outras variáveis. Se já houver uma chave, não altera o arquivo. A chave nunca é exibida. O script funciona a partir de qualquer diretório quando chamado pelo caminho correto.
 
 ```bash
-bash configure-secret-key.sh --generate-only  # somente prepara o .env
-sudo bash configure-secret-key.sh            # aplica no container
-bash configure-secret-key.sh --local         # aplica no container local
+# Dentro de scripts/:
+./configure-secret-key.sh          # gera se faltar; preserva se já existir
+./configure-secret-key.sh --help   # também aceita -h
+./configure-secret-key.sh --force  # NOVA CHAVE E RESET DOS BANCOS DESTE CHECKOUT
 ```
 
-Rodar o script novamente preserva uma chave já configurada e os demais valores do `.env`. Se houver SQLite em `volumes/sqlite/` e a chave estiver ausente, ele interrompe a geração e pede a restauração da chave original. Não apague ou substitua uma chave usada por tokens existentes. O script exige as duas chaves Turnstile antes de iniciar o backend em produção.
+As antigas opções `--local` e `--generate-only` foram removidas. Sem opções, não há build, deploy, migrations ou reset de dados, mesmo se já houver bancos e faltar a chave.
 
-Uma variável exportada em uma sessão `docker exec` só afeta aquela sessão. Para que o processo Django receba a variável e ela continue configurada em containers futuros, o script persiste o valor no `.env` e recria o serviço pelo Compose. Consulte a documentação de [variáveis no container](https://docs.docker.com/compose/how-tos/environment-variables/set-environment-variables/) e de [recriação com Compose](https://docs.docker.com/reference/cli/docker/compose/up/).
+**`--force` apaga os dados.** Ele gera outra chave mesmo que já exista uma, remove os containers com bind mounts dos bancos deste checkout e exclui os arquivos `*.sqlite3`, `*.sqlite3-wal`, `*.sqlite3-shm` e `*.sqlite3-journal` da raiz e de `volumes/sqlite/`. Isso inclui os bancos local, de produção, de execução direta e os nomes legados `container_core`, para impedir a restauração automática de dados antigos. Usuários (inclusive RKD), cadastros e sessões desses bancos são perdidos. As demais variáveis do `.env`, diretórios e volumes nomeados dos containers das aplicações são preservados. Não há `docker volume prune`, remoção recursiva de diretórios nem exclusão de bancos de outro checkout.
+
+O reset exige Docker acessível para encerrar os containers que usam esses arquivos. Antes de usá-lo, encerre também qualquer Django executado diretamente no host. Links simbólicos nas pastas/arquivos de banco são recusados. Uma configuração personalizada `DJANGO_DB_PATH` no `.env` também é recusada, pois não é seguro presumir que um banco externo deve ser apagado. O banco novo e vazio será criado pelas migrations no próximo deploy; depois será necessário cadastrar RKD novamente:
+
+```bash
+./configure-secret-key.sh --force
+./refresh-local.sh
+./create-superuser.sh
+```
+
+O deploy normal nunca chama o gerador de chave nem executa reset. Para produção, configure a chave com o mesmo script sem opções e execute o Compose de produção separadamente: `sudo docker compose up -d --build`. Os scripts `refresh-local.sh` usam exclusivamente os Composes locais.
 
 ### Persistência e primeiro usuário
 
-O SQLite fica em **`rkd-dockestra-core/volumes/sqlite/rkd_dockestra_core.sqlite3` na VPS**, montado como `/data/rkd_dockestra_core.sqlite3` no container. O backend cria a pasta e executa as migrations ao iniciar. O banco local de desenvolvimento e seus usuários não são enviados pelo Git. Para criar o primeiro operador no banco novo:
+O SQLite fica em **`rkd-dockestra-core/volumes/sqlite/rkd_dockestra_core.sqlite3` na VPS**, montado como `/data/rkd_dockestra_core.sqlite3` no container. O backend cria a pasta e executa as migrations ao iniciar. O banco local de desenvolvimento e seus usuários não são enviados pelo Git. Na VPS, informe o e-mail e a senha de app no terminal durante o cadastro, conforme a seção de confirmação por e-mail. Para criar o primeiro operador no banco novo:
 
 ```bash
-sudo docker compose exec backend python manage.py createsuperuser
+sudo docker compose exec backend python manage.py createsuperuser --username RKD
 sudo docker compose logs --tail=100 backend
 ```
 
@@ -162,7 +222,7 @@ Depois, entre em `../rkd-dockestra-web` e siga a seção de implantação do REA
 
 ### Manutenção e cuidados
 
-Faça backup de `volumes/sqlite/rkd_dockestra_core.sqlite3` **e** da `DJANGO_SECRET_KEY`, armazenando a chave separadamente. Se trocar a chave sem regravar os tokens, os tokens privados já salvos não poderão ser descriptografados. Ao atualizar este projeto, execute `git pull` e `sudo docker compose up -d --build` neste diretório. Consulte `sudo docker compose ps` e `sudo docker compose logs --tail=100 backend` se o backend não ficar saudável.
+Faça backup de `volumes/sqlite/rkd_dockestra_core.sqlite3` **e** da `DJANGO_SECRET_KEY`, armazenando a chave separadamente. Se trocar a chave, os tokens privados, os endereços de e-mail e a senha SMTP já salvos não poderão ser descriptografados; preserve a chave junto ao backup, em armazenamento separado. Ao atualizar este projeto, execute `git pull` e `sudo docker compose up -d --build` neste diretório. Consulte `sudo docker compose ps` e `sudo docker compose logs --tail=100 backend` se o backend não ficar saudável.
 
 O socket Docker dá ao backend controle efetivo sobre o host. Conceda acesso de operador (`staff`) somente a pessoas confiáveis e não exponha a porta 8000 publicamente.
 
@@ -222,4 +282,4 @@ With `DJANGO_DEBUG=False`, login requires both keys and fails closed when they a
 ./.venv/Scripts/python.exe manage.py test
 ```
 
-For nonlocal deployments, use HTTPS and set a strong, stable `DJANGO_SECRET_KEY`, `DJANGO_DEBUG=False`, and `DJANGO_ALLOWED_HOSTS` appropriately. The secret key also encrypts saved GitHub tokens; changing it makes existing tokens unreadable until operators replace them. Back up the key separately from the database. Session and CSRF cookies are marked secure when debug is disabled.
+For nonlocal deployments, use HTTPS and set a strong, stable `DJANGO_SECRET_KEY`, `DJANGO_DEBUG=False`, and `DJANGO_ALLOWED_HOSTS` appropriately. The secret key also encrypts saved GitHub tokens, email addresses and the SMTP app password; changing it makes existing credentials unreadable until operators replace them. Back up the key separately from the database. Session and CSRF cookies are marked secure when debug is disabled.
