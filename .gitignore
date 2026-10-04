@@ -15,6 +15,8 @@ downloads/
 eggs/
 .eggs/
 lib/
+# Shared shell helpers are project source, not Python build output.
+!/scripts/lib/
 lib64/
 parts/
 sdist/
@@ -156,6 +158,7 @@ activemq-data/
 # Environments
 .env
 .env.tmp.*
+.dockestra-operation.lock/
 .envrc
 .venv
 env/

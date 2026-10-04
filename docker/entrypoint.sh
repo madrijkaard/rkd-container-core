@@ -4,7 +4,7 @@ set -eu
 case "${DJANGO_SECRET_KEY:-}" in
     *[![:space:]]*) ;;
     *)
-        echo 'Erro: DJANGO_SECRET_KEY não está configurada. Preencha o .env ou execute configure-secret-key.sh antes de iniciar o backend.' >&2
+        echo 'Erro: DJANGO_SECRET_KEY não está configurada. Preencha o .env ou execute bash scripts/configure-secret-key.sh na raiz do backend antes de iniciar o container.' >&2
         exit 1
         ;;
 esac
@@ -52,6 +52,11 @@ if [ -z "$socket_group" ]; then
     socket_group=dockerhost
 fi
 usermod -aG "$socket_group" app
+
+# One-off commands use the same permissions and legacy database handling.
+if [ "$#" -gt 0 ]; then
+    exec gosu app "$@"
+fi
 
 gosu app python manage.py migrate --noinput
 exec gosu app gunicorn rkd_dockestra_core.wsgi:application \
