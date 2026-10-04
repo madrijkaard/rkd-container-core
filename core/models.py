@@ -3,7 +3,28 @@ import re
 from pathlib import PurePosixPath
 
 from django.core.exceptions import ValidationError
+from django.conf import settings
 from django.db import models
+
+
+class SmtpCredential(models.Model):
+    """One credential per database, never exposed through admin or the API."""
+
+    id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
+    encrypted_email = models.TextField(editable=False)
+    encrypted_password = models.TextField(editable=False)
+
+    class Meta:
+        db_table = 'smtp_credential'
+        constraints = [models.CheckConstraint(condition=models.Q(id=1), name='smtp_credential_singleton')]
+
+
+class OperatorEmail(models.Model):
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='operator_email')
+    encrypted_email = models.TextField(editable=False)
+
+    class Meta:
+        db_table = 'operator_email'
 
 
 def port_binding(value):

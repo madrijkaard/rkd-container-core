@@ -49,6 +49,17 @@ TURNSTILE_ALLOWED_HOSTNAMES = [
     host.strip().lower() for host in os.environ.get('TURNSTILE_ALLOWED_HOSTNAMES', '').split(',') if host.strip()
 ]
 
+# Gmail SMTP. The password is entered interactively and encrypted in SQLite.
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = os.environ.get('EMAIL_HOST', 'smtp.gmail.com')
+EMAIL_PORT = int(os.environ.get('EMAIL_PORT', '587'))
+EMAIL_USE_TLS = os.environ.get('EMAIL_USE_TLS', 'True').lower() == 'true'
+EMAIL_USE_SSL = os.environ.get('EMAIL_USE_SSL', 'False').lower() == 'true'
+EMAIL_HOST_USER = ''  # Sender and password come from encrypted database records.
+EMAIL_HOST_PASSWORD = ''  # Never load the legacy password from the environment.
+DEFAULT_FROM_EMAIL = ''  # Verification explicitly uses the saved sender address.
+EMAIL_TIMEOUT = 15
+
 
 # Application definition
 
